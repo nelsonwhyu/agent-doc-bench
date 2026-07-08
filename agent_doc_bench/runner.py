@@ -35,6 +35,26 @@ def _score_and_comment(scorer_fn: Any, trace: CodingTrace, task: CodingTask) -> 
     return result.score, result.comment
 
 
+def _make_eval_fn(key: str, scorer_fn: Any, task_map: dict[str, CodingTask]):
+    # LangSmith's evaluate() inspects the evaluator's signature and rejects
+    # any positional parameter other than run/example/inputs/outputs/
+    # reference_outputs, so key/scorer_fn/task_map must be bound via a
+    # factory closure rather than default arguments on eval_fn itself.
+    def eval_fn(run, example) -> dict:
+        task = task_map[example.inputs["task_id"]]
+        trace = CodingTrace(
+            generated_code=run.outputs.get("generated_code", ""),
+            language=example.inputs.get("language", "python"),
+            steps=run.outputs.get("steps", 0),
+            token_usage=run.outputs.get("token_usage", {}),
+            error=run.outputs.get("error"),
+        )
+        result = run_scorer(key, lambda: _score_and_comment(scorer_fn, trace, task))
+        return {"key": result.key, "score": result.score, "comment": result.comment}
+
+    return eval_fn
+
+
 def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_library")) -> None:
     tasks = load_suite(config.task_suite)
     reporter = LangSmithReporter(project=config.langsmith_project)
@@ -89,20 +109,7 @@ def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_librar
                 if name not in SCORER_REGISTRY:
                     continue
                 key, scorer_fn = SCORER_REGISTRY[name]
-
-                def eval_fn(run, example, key=key, scorer_fn=scorer_fn) -> dict:
-                    task: CodingTask = task_map[example.inputs["task_id"]]
-                    trace = CodingTrace(
-                        generated_code=run.outputs.get("generated_code", ""),
-                        language=example.inputs.get("language", "python"),
-                        steps=run.outputs.get("steps", 0),
-                        token_usage=run.outputs.get("token_usage", {}),
-                        error=run.outputs.get("error"),
-                    )
-                    result = run_scorer(key, lambda: _score_and_comment(scorer_fn, trace, task))
-                    return {"key": result.key, "score": result.score, "comment": result.comment}
-
-                evals.append(eval_fn)
+                evals.append(_make_eval_fn(key, scorer_fn, task_map))
 
             return evals
 
