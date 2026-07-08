@@ -1,0 +1,47 @@
+- id: blpapi_open_session
+  instruction: >
+    Write Python code to connect to a Bloomberg Terminal using BLPAPI and open a session.
+    The code should start the session and check whether it started successfully.
+  language: python
+  expected_patterns:
+    - regex: "blpapi\\.Session\\("
+      label: "instantiates blpapi.Session"
+    - regex: "session\\.start\\("
+      label: "calls session.start()"
+    - regex: "import blpapi"
+      label: "imports blpapi"
+  anti_patterns:
+    - regex: "(username|password|api[_-]?key|token)"
+      label: "uses credential-based auth (wrong method)"
+    - regex: "requests\\.|http"
+      label: "uses HTTP instead of native BLPAPI"
+  llm_judge_rubric: |
+    Score each dimension 1–5:
+    - product_selection: Used BLPAPI (not Bloomberg REST API, Data License, or BQuant)?
+    - auth_method: Relies on local Bloomberg Terminal connection (no credentials in code)?
+    - design_pattern: Correctly opens and checks session start status?
+    - syntax_quality: Is the code idiomatic, complete, and correct Python?
+  tags: [auth, session]
+
+- id: blpapi_event_loop
+  instruction: >
+    Write Python code that opens a BLPAPI session and processes events from the event queue
+    using a synchronous event loop. The loop should handle SESSION_STATUS events and exit cleanly.
+  language: python
+  expected_patterns:
+    - regex: "session\\.nextEvent\\("
+      label: "calls session.nextEvent()"
+    - regex: "blpapi\\.Event\\.SESSION_STATUS"
+      label: "handles SESSION_STATUS event type"
+    - regex: "for\\s+\\w+\\s+in\\s+event"
+      label: "iterates over messages in event"
+  anti_patterns:
+    - regex: "asyncio"
+      label: "uses asyncio (wrong pattern for sync BLPAPI)"
+  llm_judge_rubric: |
+    Score each dimension 1–5:
+    - product_selection: Uses native BLPAPI event loop (not REST polling)?
+    - auth_method: No credentials hardcoded?
+    - design_pattern: Correctly uses nextEvent() loop with event type checking?
+    - syntax_quality: Is the code idiomatic, complete, and correct Python?
+  tags: [auth, event-loop]

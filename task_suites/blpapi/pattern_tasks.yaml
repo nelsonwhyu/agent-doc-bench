@@ -1,0 +1,23 @@
+- id: blpapi_error_handling
+  instruction: >
+    Write Python code that opens a BLPAPI session, sends a reference data request for
+    "INVALID_TICKER Equity", and handles the case where Bloomberg returns a security error
+    or field error in the response gracefully (print the error and continue).
+  language: python
+  expected_patterns:
+    - regex: "SECURITY_ERROR|securityError"
+      label: "checks for SECURITY_ERROR"
+    - regex: "hasElement|getElement"
+      label: "uses element access to inspect response"
+    - regex: "try|except|if.*error"
+      label: "includes error handling logic"
+  anti_patterns:
+    - regex: "raise\\s+Exception|sys\\.exit"
+      label: "crashes on error instead of handling gracefully"
+  llm_judge_rubric: |
+    Score each dimension 1–5:
+    - product_selection: Uses BLPAPI response parsing (not REST JSON)?
+    - auth_method: No credentials in code?
+    - design_pattern: Checks for SECURITY_ERROR or FIELD_EXCEPTION in response; does not crash?
+    - syntax_quality: Is the code idiomatic, complete, and correct Python?
+  tags: [patterns, error-handling]

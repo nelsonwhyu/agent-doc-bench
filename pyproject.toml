@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "agent-doc-bench"
+version = "0.1.0"
+description = "Evaluation framework for measuring how well documentation helps AI coding agents use APIs correctly."
+authors = []
+readme = "README.md"
+packages = [{ include = "agent_doc_bench" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+anthropic = "^0.40.0"
+langsmith = "^0.1.0"
+pydantic = "^2.0"
+typer = { extras = ["all"], version = "^0.12" }
+pyyaml = "^6.0"
+python-dotenv = "^1.0"
+rich = "^13.0"
+
+[tool.poetry.scripts]
+agent-doc-bench = "agent_doc_bench.cli:app"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

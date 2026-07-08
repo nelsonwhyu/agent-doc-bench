@@ -1,0 +1,10 @@
+name: tools_ablation
+task_suite: blpapi
+variable:
+  name: tools
+  values: [none, web_search]
+fixed:
+  model: claude-sonnet-4-6
+  documentation: v1
+scorers: [syntax, pattern, llm_judge]
+langsmith_project: agent-doc-bench

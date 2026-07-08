@@ -1,0 +1,13 @@
+name: llm_ablation
+task_suite: blpapi
+variable:
+  name: model
+  values:
+    - claude-haiku-4-5-20251001
+    - claude-sonnet-4-6
+    - claude-opus-4-8
+fixed:
+  documentation: v1
+  tools: none
+scorers: [syntax, pattern, llm_judge]
+langsmith_project: agent-doc-bench

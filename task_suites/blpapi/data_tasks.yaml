@@ -1,0 +1,51 @@
+- id: blpapi_reference_data
+  instruction: >
+    Write Python code using BLPAPI to fetch the last price (PX_LAST) and name (NAME)
+    fields for the security "AAPL US Equity" using a reference data request (BDP equivalent).
+  language: python
+  expected_patterns:
+    - regex: "//blp/refdata"
+      label: "uses //blp/refdata service"
+    - regex: "ReferenceDataRequest"
+      label: "creates ReferenceDataRequest"
+    - regex: "PX_LAST"
+      label: "requests PX_LAST field"
+    - regex: "AAPL US Equity"
+      label: "uses correct security identifier format"
+  anti_patterns:
+    - regex: "HistoricalDataRequest"
+      label: "uses wrong request type (historical instead of reference)"
+    - regex: "requests\\.|http"
+      label: "uses HTTP instead of native BLPAPI"
+  llm_judge_rubric: |
+    Score each dimension 1–5:
+    - product_selection: Uses native BLPAPI refdata service (not REST or BQL)?
+    - auth_method: No credentials in code; relies on Terminal connection?
+    - design_pattern: Correctly constructs ReferenceDataRequest and parses response?
+    - syntax_quality: Is the code idiomatic, complete, and correct Python?
+  tags: [data, reference-data]
+
+- id: blpapi_historical_data
+  instruction: >
+    Write Python code using BLPAPI to fetch 30 days of daily closing prices (PX_LAST)
+    for "MSFT US Equity". Use a HistoricalDataRequest with appropriate start and end dates.
+  language: python
+  expected_patterns:
+    - regex: "HistoricalDataRequest"
+      label: "creates HistoricalDataRequest"
+    - regex: "//blp/refdata"
+      label: "uses //blp/refdata service"
+    - regex: "periodicitySelection|DAILY"
+      label: "sets periodicity to DAILY"
+    - regex: "startDate|endDate"
+      label: "sets date range"
+  anti_patterns:
+    - regex: "ReferenceDataRequest"
+      label: "uses wrong request type (reference instead of historical)"
+  llm_judge_rubric: |
+    Score each dimension 1–5:
+    - product_selection: Uses HistoricalDataRequest on //blp/refdata (not //blp/mktdata)?
+    - auth_method: No credentials in code?
+    - design_pattern: Sets periodicitySelection, startDate, and endDate correctly?
+    - syntax_quality: Is the code idiomatic, complete, and correct Python?
+  tags: [data, historical]
