@@ -1,22 +1,31 @@
+# Regex cheatsheet for expected_patterns / anti_patterns below:
+#   .     matches any single character — escape as \. to mean a literal dot
+#   ( )   grouping — escape as \( \) to mean literal parentheses (e.g. a function call)
+#   |     OR — "A|B" matches either A or B
+#   \s+   one or more whitespace characters (space, tab, newline)
+#   \w+   one or more word characters (letters, digits, underscore)
+# Rule of thumb: if you mean a literal ., (, ), [, or ], escape it with a backslash.
+# Everything else here is just plain substring matching.
+
 - id: blpapi_reference_data
   instruction: >
     Write Python code using BLPAPI to fetch the last price (PX_LAST) and name (NAME)
     fields for the security "AAPL US Equity" using a reference data request (BDP equivalent).
   language: python
   expected_patterns:
-    - regex: "//blp/refdata"
-      label: "uses //blp/refdata service"
-    - regex: "ReferenceDataRequest"
-      label: "creates ReferenceDataRequest"
-    - regex: "PX_LAST"
-      label: "requests PX_LAST field"
-    - regex: "AAPL US Equity"
-      label: "uses correct security identifier format"
+    - label: "uses //blp/refdata service"
+      regex: "//blp/refdata"
+    - label: "creates ReferenceDataRequest"
+      regex: "ReferenceDataRequest"
+    - label: "requests PX_LAST field"
+      regex: "PX_LAST"
+    - label: "uses correct security identifier format"
+      regex: "AAPL US Equity"
   anti_patterns:
-    - regex: "HistoricalDataRequest"
-      label: "uses wrong request type (historical instead of reference)"
-    - regex: "requests\\.|http"
-      label: "uses HTTP instead of native BLPAPI"
+    - label: "uses wrong request type (historical instead of reference)"
+      regex: "HistoricalDataRequest"
+    - label: "uses HTTP instead of native BLPAPI"
+      regex: "requests\\.|http"
   llm_judge_rubric: |
     Score each dimension 1–5:
     - product_selection: Uses native BLPAPI refdata service (not REST or BQL)?
@@ -31,17 +40,17 @@
     for "MSFT US Equity". Use a HistoricalDataRequest with appropriate start and end dates.
   language: python
   expected_patterns:
-    - regex: "HistoricalDataRequest"
-      label: "creates HistoricalDataRequest"
-    - regex: "//blp/refdata"
-      label: "uses //blp/refdata service"
-    - regex: "periodicitySelection|DAILY"
-      label: "sets periodicity to DAILY"
-    - regex: "startDate|endDate"
-      label: "sets date range"
+    - label: "creates HistoricalDataRequest"
+      regex: "HistoricalDataRequest"
+    - label: "uses //blp/refdata service"
+      regex: "//blp/refdata"
+    - label: "sets periodicity to DAILY"
+      regex: "periodicitySelection|DAILY"
+    - label: "sets date range"
+      regex: "startDate|endDate"
   anti_patterns:
-    - regex: "ReferenceDataRequest"
-      label: "uses wrong request type (reference instead of historical)"
+    - label: "uses wrong request type (reference instead of historical)"
+      regex: "ReferenceDataRequest"
   llm_judge_rubric: |
     Score each dimension 1–5:
     - product_selection: Uses HistoricalDataRequest on //blp/refdata (not //blp/mktdata)?

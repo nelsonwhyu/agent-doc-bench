@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from langsmith import Client
+from langsmith import Client, evaluate
 
 
 class LangSmithReporter:
@@ -18,13 +18,14 @@ class LangSmithReporter:
         evaluators: list[Callable],
         metadata: dict[str, Any] | None = None,
     ) -> str:
-        results = self._client.evaluate(
+        results = evaluate(
             target_fn,
             data=dataset_name,
             evaluators=evaluators,
             experiment_prefix=experiment_name,
             metadata=metadata or {},
             max_concurrency=2,
+            client=self._client,
         )
         return results.experiment_name
 

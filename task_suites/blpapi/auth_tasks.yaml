@@ -1,20 +1,29 @@
+# Regex cheatsheet for expected_patterns / anti_patterns below:
+#   .     matches any single character — escape as \. to mean a literal dot
+#   ( )   grouping — escape as \( \) to mean literal parentheses (e.g. a function call)
+#   |     OR — "A|B" matches either A or B
+#   \s+   one or more whitespace characters (space, tab, newline)
+#   \w+   one or more word characters (letters, digits, underscore)
+# Rule of thumb: if you mean a literal ., (, ), [, or ], escape it with a backslash.
+# Everything else here is just plain substring matching.
+
 - id: blpapi_open_session
   instruction: >
     Write Python code to connect to a Bloomberg Terminal using BLPAPI and open a session.
     The code should start the session and check whether it started successfully.
   language: python
   expected_patterns:
-    - regex: "blpapi\\.Session\\("
-      label: "instantiates blpapi.Session"
-    - regex: "session\\.start\\("
-      label: "calls session.start()"
-    - regex: "import blpapi"
-      label: "imports blpapi"
+    - label: "instantiates blpapi.Session"
+      regex: "blpapi\\.Session\\("
+    - label: "calls session.start()"
+      regex: "session\\.start\\("
+    - label: "imports blpapi"
+      regex: "import blpapi"
   anti_patterns:
-    - regex: "(username|password|api[_-]?key|token)"
-      label: "uses credential-based auth (wrong method)"
-    - regex: "requests\\.|http"
-      label: "uses HTTP instead of native BLPAPI"
+    - label: "uses credential-based auth (wrong method)"
+      regex: "(username|password|api[_-]?key|token)"
+    - label: "uses HTTP instead of native BLPAPI"
+      regex: "requests\\.|http"
   llm_judge_rubric: |
     Score each dimension 1–5:
     - product_selection: Used BLPAPI (not Bloomberg REST API, Data License, or BQuant)?
@@ -29,15 +38,15 @@
     using a synchronous event loop. The loop should handle SESSION_STATUS events and exit cleanly.
   language: python
   expected_patterns:
-    - regex: "session\\.nextEvent\\("
-      label: "calls session.nextEvent()"
-    - regex: "blpapi\\.Event\\.SESSION_STATUS"
-      label: "handles SESSION_STATUS event type"
-    - regex: "for\\s+\\w+\\s+in\\s+event"
-      label: "iterates over messages in event"
+    - label: "calls session.nextEvent()"
+      regex: "session\\.nextEvent\\("
+    - label: "handles SESSION_STATUS event type"
+      regex: "blpapi\\.Event\\.SESSION_STATUS"
+    - label: "iterates over messages in event"
+      regex: "for\\s+\\w+\\s+in\\s+event"
   anti_patterns:
-    - regex: "asyncio"
-      label: "uses asyncio (wrong pattern for sync BLPAPI)"
+    - label: "uses asyncio (wrong pattern for sync BLPAPI)"
+      regex: "asyncio"
   llm_judge_rubric: |
     Score each dimension 1–5:
     - product_selection: Uses native BLPAPI event loop (not REST polling)?
