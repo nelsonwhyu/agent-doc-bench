@@ -15,6 +15,10 @@ class SyntaxResult:
     def score(self) -> float:
         return 1.0 if self.passed else 0.0
 
+    @property
+    def comment(self) -> str | None:
+        return self.error
+
 
 def score(trace: CodingTrace) -> SyntaxResult:
     if not trace.generated_code:

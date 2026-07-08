@@ -24,6 +24,15 @@ class PatternResult:
         anti_penalty = 0.2 * len(self.anti_pattern_hits)
         return max(0.0, pattern_score - anti_penalty)
 
+    @property
+    def comment(self) -> str | None:
+        parts = []
+        if self.expected_misses:
+            parts.append(f"missed: {', '.join(self.expected_misses)}")
+        if self.anti_pattern_hits:
+            parts.append(f"anti-patterns hit: {', '.join(self.anti_pattern_hits)}")
+        return "; ".join(parts) if parts else None
+
 
 def score(trace: CodingTrace, task: CodingTask) -> PatternResult:
     code = trace.generated_code or ""

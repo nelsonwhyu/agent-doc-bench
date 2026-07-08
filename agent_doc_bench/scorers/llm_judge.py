@@ -53,6 +53,12 @@ class LLMJudgeResult:
         ]
         return (sum(values) / (len(values) * 5))
 
+    @property
+    def comment(self) -> str | None:
+        if self.scores is not None:
+            return self.scores.reasoning
+        return self.error
+
 
 def score(trace: CodingTrace, task: CodingTask) -> LLMJudgeResult:
     if not task.llm_judge_rubric:
