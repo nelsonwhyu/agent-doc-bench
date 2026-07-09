@@ -52,7 +52,9 @@ agent-doc-bench/
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
-│       └── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── results_fetcher.py      # Reads scores/comments/code back from LangSmith into plain dataclasses
+│       └── report_formatters.py    # Renders results_fetcher output as a rich table, JSON, or Markdown
 │
 ├── docs_library/                   # Documentation variants (Markdown)
 │   └── blpapi/
@@ -210,8 +212,12 @@ variants in the same way correctness scores are:
 # Run an ablation (records results in LangSmith)
 agent-doc-bench run experiments/doc_ablation.yaml
 
-# Print a summary table from the last LangSmith experiment
-agent-doc-bench report --experiment doc_ablation
+# Print a scored summary + per-task detail table, pulled from LangSmith
+agent-doc-bench report experiments/doc_ablation.yaml
+
+# Machine-readable export (e.g. to paste into an LLM chat for interpretation)
+agent-doc-bench report experiments/doc_ablation.yaml --format markdown
+agent-doc-bench report experiments/doc_ablation.yaml --format json --output report.json
 
 # (Future) Record live Bloomberg responses to fixtures for mock mode
 agent-doc-bench record --task blpapi_open_session
@@ -245,6 +251,9 @@ agent-doc-bench record --task blpapi_open_session
     it; opt out with `--no-default-groups` on a machine that can't reach Bloomberg's index  ✅
 20. `sandbox/fixtures/blpapi_live_shim.py` + `sandbox/live_runner.py` — live-mode execution against a
     real Bloomberg Terminal, with metadata-only capture so no market data reaches LangSmith  ✅
+21. `reporting/results_fetcher.py` + `reporting/report_formatters.py` — `report` now reads scores back
+    from LangSmith (summary + per-task detail table, JSON/Markdown export) instead of only listing
+    experiment names  ✅
 
 ---
 
@@ -264,4 +273,7 @@ uv run agent-doc-bench run experiments/doc_ablation.yaml
 # (metric_n_turns, metric_n_total_tokens, metric_time_to_first_token, ...)
 # v1/v2 rows should outscore none on pattern + llm_judge (once v2.md has
 # real content — see step 12 above)
+
+# Verify locally without opening LangSmith's UI:
+uv run agent-doc-bench report experiments/doc_ablation.yaml
 ```

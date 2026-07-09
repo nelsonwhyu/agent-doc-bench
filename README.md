@@ -53,7 +53,9 @@ agent-doc-bench/
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
-│       └── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── results_fetcher.py      # Reads scores/comments/code back from LangSmith into plain dataclasses
+│       └── report_formatters.py    # Renders results_fetcher output as a rich table, JSON, or Markdown
 │
 ├── docs_library/                   # Documentation variants (Markdown), one folder per API
 │   └── blpapi/
@@ -117,8 +119,14 @@ This runs every task in the experiment's task suite once per value of the swept 
 ### 4. View results
 
 ```bash
-uv run agent-doc-bench report --experiment doc_ablation
+uv run agent-doc-bench report experiments/doc_ablation.yaml
 ```
+
+Prints a scored summary table (mean per doc variant) plus a per-task detail table, pulled from
+LangSmith's stored feedback. Add `--format json` or `--format markdown` (optionally with `--output
+<path>`) for a machine-readable export — handy for pasting into a chat with another LLM to have it
+interpret the results. Passing a bare experiment name instead of a YAML path falls back to a plain
+list of matching LangSmith experiment names (the old behavior), with no score detail.
 
 Or open the LangSmith project directly to compare runs side by side.
 
