@@ -104,29 +104,61 @@ def _score_live(
     a generated script prints or raises on real values (prices, security
     data, ...) that must not leave the sandbox. Raw output is written only
     to a local, gitignored log file for the operator's own debugging.
+
+    Exit code 0 alone isn't enough to call this "passed": a script can
+    exit cleanly without ever reaching Bloomberg (e.g. it ignores
+    session.start()'s return value) or without ever getting real data back
+    (e.g. it breaks out on the first TIMEOUT). blpapi_live_shim.py computes
+    session_started/received_response semantically, using the real
+    blpapi.Event constants — this function just enforces them.
     """
-    events = []
+    events: list[dict] = []
+    session_started = False
+    received_response = False
     if metadata_path.exists():
         try:
-            events = json.loads(metadata_path.read_text())
+            data = json.loads(metadata_path.read_text())
+            events = data.get("events", [])
+            session_started = data.get("session_started", False)
+            received_response = data.get("received_response", False)
         except (json.JSONDecodeError, OSError):
-            events = []
+            pass
 
     event_summary = ", ".join(f"{e['kind']}" for e in events) if events else "no session activity observed"
     log_path = _write_local_log(proc, task)
 
-    if proc.returncode == 0:
+    if proc.returncode != 0:
         return ExecutionResult(
-            passed=True,
-            comment=f"live execution succeeded ({len(events)} session events: {event_summary})",
+            passed=False,
+            comment=(
+                f"live execution failed (exit {proc.returncode}, {len(events)} session events: "
+                f"{event_summary}); raw output kept local-only, not sent to LangSmith: {log_path}"
+            ),
+        )
+
+    if not session_started:
+        return ExecutionResult(
+            passed=False,
+            comment=(
+                "script exited 0 but the session never reported a successful start "
+                f"({len(events)} session events: {event_summary}); raw output kept local-only, "
+                f"not sent to LangSmith: {log_path}"
+            ),
+        )
+
+    if not received_response:
+        return ExecutionResult(
+            passed=False,
+            comment=(
+                "script exited 0 and the session started, but no RESPONSE/PARTIAL_RESPONSE event "
+                f"was ever observed ({len(events)} session events: {event_summary}); raw output "
+                f"kept local-only, not sent to LangSmith: {log_path}"
+            ),
         )
 
     return ExecutionResult(
-        passed=False,
-        comment=(
-            f"live execution failed (exit {proc.returncode}, {len(events)} session events: "
-            f"{event_summary}); raw output kept local-only, not sent to LangSmith: {log_path}"
-        ),
+        passed=True,
+        comment=f"live execution succeeded ({len(events)} session events: {event_summary})",
     )
 
 

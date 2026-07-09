@@ -19,9 +19,19 @@ from pathlib import Path
 
 
 class _Recorder:
-    def __init__(self) -> None:
+    def __init__(self, response_event_types: set[int]) -> None:
         self.events: list[dict] = []
         self._last_ts = time.monotonic()
+        self._response_event_types = response_event_types
+        # Semantic verdicts, not just an event tally — a script can exit 0
+        # without ever actually reaching Bloomberg (e.g. it ignores
+        # session.start()'s return value) or without ever receiving real
+        # data back (e.g. it breaks out on the first TIMEOUT). These flags
+        # let the scorer distinguish "ran to completion" from "actually
+        # talked to Bloomberg and got a response" without needing to know
+        # blpapi's event-type constants itself.
+        self.session_started = False
+        self.received_response = False
 
     def record(self, kind: str, **fields) -> None:
         now = time.monotonic()
@@ -29,12 +39,21 @@ class _Recorder:
             self.events.append(
                 {"kind": kind, "elapsed_ms": round((now - self._last_ts) * 1000, 2), **fields}
             )
+            if kind == "session_start" and fields.get("ok"):
+                self.session_started = True
+            if kind == "event" and fields.get("event_type") in self._response_event_types:
+                self.received_response = True
         except Exception:
             pass
         self._last_ts = now
 
     def flush(self, path: Path) -> None:
-        path.write_text(json.dumps(self.events, indent=2))
+        payload = {
+            "events": self.events,
+            "session_started": self.session_started,
+            "received_response": self.received_response,
+        }
+        path.write_text(json.dumps(payload, indent=2))
 
 
 def install(metadata_path: Path) -> _Recorder:
@@ -47,11 +66,17 @@ def install(metadata_path: Path) -> _Recorder:
     """
     import blpapi
 
-    recorder = _Recorder()
-    real_start = blpapi.Session.start
-    real_stop = blpapi.Session.stop
-    real_send_request = blpapi.Session.sendRequest
-    real_next_event = blpapi.Session.nextEvent
+    # blpapi/__init__.py re-exports Session without an explicit `as Session`
+    # alias or `__all__`, so Pyright's PEP 561 re-export check flags every
+    # `blpapi.Session` access as unexported even though it's genuinely
+    # present at runtime. Rebind once here instead of silencing per line.
+    Session = blpapi.Session  # pyright: ignore[reportPrivateImportUsage]
+
+    recorder = _Recorder({int(blpapi.Event.RESPONSE), int(blpapi.Event.PARTIAL_RESPONSE)})
+    real_start = Session.start
+    real_stop = Session.stop
+    real_send_request = Session.sendRequest
+    real_next_event = Session.nextEvent
 
     def start(self, *args, **kwargs):
         result = real_start(self, *args, **kwargs)
@@ -77,9 +102,9 @@ def install(metadata_path: Path) -> _Recorder:
         recorder.record("event", event_type=int(event.eventType()), message_count=message_count)
         return event
 
-    blpapi.Session.start = start
-    blpapi.Session.stop = stop
-    blpapi.Session.sendRequest = send_request
-    blpapi.Session.nextEvent = next_event
+    Session.start = start
+    Session.stop = stop
+    Session.sendRequest = send_request
+    Session.nextEvent = next_event
 
     return recorder
