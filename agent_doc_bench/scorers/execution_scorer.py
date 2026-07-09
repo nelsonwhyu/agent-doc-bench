@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from agent_doc_bench.agent.base_agent import CodingTrace
 from agent_doc_bench.tasks.base_task import CodingTask
@@ -34,7 +36,7 @@ def _is_live_mode() -> bool:
     return os.environ.get("BLOOMBERG_MODE", "mock") == "live"
 
 
-def score(trace: CodingTrace, task: CodingTask) -> ExecutionResult:
+def score(trace: CodingTrace, task: CodingTask, run_context: dict[str, Any] | None = None) -> ExecutionResult:
     """Run the generated script against either a mocked `blpapi` module
     (default) or a real Bloomberg Terminal (BLOOMBERG_MODE=live), rather
     than only regex-matching its source (see pattern_scorer). This catches
@@ -46,11 +48,18 @@ def score(trace: CodingTrace, task: CodingTask) -> ExecutionResult:
     LangSmith — only the sandboxed run's exit code and the structural
     metadata captured by blpapi_live_shim.py (event types, message counts,
     timing) are used.
+
+    `run_context` (e.g. {"variable_name": "documentation", "variable_value":
+    "v1", "model": ..., "tools": ...}) identifies which experiment variant
+    produced this run — it's config labels, not generated content, so it's
+    safe to fold into the local log's filename/header even though it never
+    reaches LangSmith itself.
     """
     if trace.language != "python" or not trace.generated_code:
         return ExecutionResult(passed=False, comment="no python code to execute")
 
     live_mode = _is_live_mode()
+    metadata_path: Path | None = None
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -81,7 +90,8 @@ def score(trace: CodingTrace, task: CodingTask) -> ExecutionResult:
             )
 
         if live_mode:
-            return _score_live(proc, metadata_path, task)
+            assert metadata_path is not None
+            return _score_live(proc, metadata_path, task, run_context)
         return _score_mock(proc)
 
 
@@ -96,7 +106,10 @@ def _score_mock(proc: subprocess.CompletedProcess) -> ExecutionResult:
 
 
 def _score_live(
-    proc: subprocess.CompletedProcess, metadata_path: Path, task: CodingTask
+    proc: subprocess.CompletedProcess,
+    metadata_path: Path,
+    task: CodingTask,
+    run_context: dict[str, Any] | None,
 ) -> ExecutionResult:
     """Build a result from exit code + structural metadata only.
 
@@ -125,7 +138,7 @@ def _score_live(
             pass
 
     event_summary = ", ".join(f"{e['kind']}" for e in events) if events else "no session activity observed"
-    log_path = _write_local_log(proc, task)
+    log_path = _write_local_log(proc, task, run_context)
 
     if proc.returncode != 0:
         return ExecutionResult(
@@ -162,10 +175,25 @@ def _score_live(
     )
 
 
-def _write_local_log(proc: subprocess.CompletedProcess, task: CodingTask) -> Path:
+def _slugify(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value)).strip("-") or "unknown"
+
+
+def _write_local_log(
+    proc: subprocess.CompletedProcess, task: CodingTask, run_context: dict[str, Any] | None
+) -> Path:
+    run_context = run_context or {}
+    variant_slug = _slugify(f"{run_context.get('variable_name', 'variant')}-{run_context.get('variable_value', 'unknown')}")
+
     _LOCAL_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = _LOCAL_LOG_DIR / f"{task.id}-{int(time.time())}.log"
-    log_path.write_text(
-        f"exit_code={proc.returncode}\n\n--- stdout ---\n{proc.stdout}\n\n--- stderr ---\n{proc.stderr}\n"
+    log_path = _LOCAL_LOG_DIR / f"{task.id}__{variant_slug}__{int(time.time())}.log"
+
+    fixed_config = {k: v for k, v in run_context.items() if k not in ("variable_name", "variable_value")}
+    header = (
+        f"task_id={task.id}\n"
+        f"variable={run_context.get('variable_name', '?')}={run_context.get('variable_value', '?')}\n"
+        f"fixed_config={fixed_config}\n"
+        f"exit_code={proc.returncode}\n"
     )
+    log_path.write_text(f"{header}\n--- stdout ---\n{proc.stdout}\n\n--- stderr ---\n{proc.stderr}\n")
     return log_path

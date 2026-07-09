@@ -165,7 +165,8 @@ API would swap in its own mock/executor rather than reusing `blpapi_mock.py`.
   a JSON file the scorer reads. `sandbox/live_runner.py` is the actual subprocess entrypoint in live
   mode: it installs the shim, then runs `generated.py` via `runpy`, flushing metadata even on failure.
   Raw stdout/stderr are written only to a local, gitignored log file
-  (`sandbox/.live_logs/<task_id>-<timestamp>.log`) referenced by *path only* in the comment, for local
+  (`sandbox/.live_logs/<task_id>__<variable_name>-<variable_value>__<timestamp>.log`, with a header
+  spelling out the task/variant/fixed config) referenced by *path only* in the comment, for local
   debugging — never their contents.
 
 ---

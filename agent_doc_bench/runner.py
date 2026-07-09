@@ -15,18 +15,24 @@ from agent_doc_bench.tasks.task_registry import load_suite
 
 # Maps a scorer name (as used in ExperimentConfig.scorers) to the LangSmith
 # feedback key it reports under and the scoring function itself. Every
-# scorer function takes (trace, task) and returns an object exposing
-# .score and .comment, so they can be run uniformly below.
+# scorer function takes (trace, task, run_context) and returns an object
+# exposing .score and .comment, so they can be run uniformly below — most
+# scorers ignore run_context (config labels: doc variant, model, tools),
+# execution_scorer is the exception (see its registry entry below).
 #
 # These are correctness graders, toggled per-experiment via config.scorers.
 # Tracked metrics (latency, token/turn counts) are separate: they're always
 # reported regardless of config.scorers, via _make_metrics_eval_fn below.
 SCORER_REGISTRY: dict[str, tuple[str, Any]] = {
-    "syntax": ("syntax_score", lambda trace, task: syntax_scorer.score(trace)),
-    "pattern": ("pattern_score", lambda trace, task: pattern_scorer.score(trace, task)),
-    "llm_judge": ("llm_judge_score", lambda trace, task: llm_judge.score(trace, task)),
-    "static_analysis": ("static_analysis_score", lambda trace, task: static_analysis_scorer.score(trace)),
-    "execution": ("execution_score", lambda trace, task: execution_scorer.score(trace, task)),
+    "syntax": ("syntax_score", lambda trace, task, ctx: syntax_scorer.score(trace)),
+    "pattern": ("pattern_score", lambda trace, task, ctx: pattern_scorer.score(trace, task)),
+    "llm_judge": ("llm_judge_score", lambda trace, task, ctx: llm_judge.score(trace, task)),
+    "static_analysis": ("static_analysis_score", lambda trace, task, ctx: static_analysis_scorer.score(trace)),
+    # execution_scorer is the only scorer that uses ctx — it's config labels
+    # (doc variant, model, tools), folded into live-mode's local debug log
+    # filename/header so a run can be traced back to its variant without
+    # any of that config ever needing to touch LangSmith.
+    "execution": ("execution_score", lambda trace, task, ctx: execution_scorer.score(trace, task, ctx)),
 }
 
 
@@ -37,16 +43,18 @@ def _load_doc(api: str, version: str, docs_base: Path) -> str:
     return path.read_text()
 
 
-def _score_and_comment(scorer_fn: Any, trace: CodingTrace, task: CodingTask) -> tuple[float | bool, str | None]:
-    result = scorer_fn(trace, task)
+def _score_and_comment(
+    scorer_fn: Any, trace: CodingTrace, task: CodingTask, run_context: dict[str, Any]
+) -> tuple[float | bool, str | None]:
+    result = scorer_fn(trace, task, run_context)
     return result.score, result.comment
 
 
-def _make_eval_fn(key: str, scorer_fn: Any, task_map: dict[str, CodingTask]):
+def _make_eval_fn(key: str, scorer_fn: Any, task_map: dict[str, CodingTask], run_context: dict[str, Any]):
     # LangSmith's evaluate() inspects the evaluator's signature and rejects
     # any positional parameter other than run/example/inputs/outputs/
-    # reference_outputs, so key/scorer_fn/task_map must be bound via a
-    # factory closure rather than default arguments on eval_fn itself.
+    # reference_outputs, so key/scorer_fn/task_map/run_context must be bound
+    # via a factory closure rather than default arguments on eval_fn itself.
     def eval_fn(run, example) -> dict:
         task = task_map[example.inputs["task_id"]]
         trace = CodingTrace(
@@ -56,7 +64,7 @@ def _make_eval_fn(key: str, scorer_fn: Any, task_map: dict[str, CodingTask]):
             token_usage=run.outputs.get("token_usage", {}),
             error=run.outputs.get("error"),
         )
-        result = run_scorer(key, lambda: _score_and_comment(scorer_fn, trace, task))
+        result = run_scorer(key, lambda: _score_and_comment(scorer_fn, trace, task, run_context))
         return {"key": result.key, "score": result.score, "comment": result.comment}
 
     return eval_fn
@@ -124,14 +132,20 @@ def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_librar
                 }
             return target_fn
 
-        def make_evaluators(task_map=task_by_id, enabled=config.scorers):
+        run_context: dict[str, Any] = {
+            "variable_name": config.variable.name,
+            "variable_value": value,
+            **variable_fixed,
+        }
+
+        def make_evaluators(task_map=task_by_id, enabled=config.scorers, ctx=run_context):
             evals = []
 
             for name in enabled:
                 if name not in SCORER_REGISTRY:
                     continue
                 key, scorer_fn = SCORER_REGISTRY[name]
-                evals.append(_make_eval_fn(key, scorer_fn, task_map))
+                evals.append(_make_eval_fn(key, scorer_fn, task_map, ctx))
 
             evals.append(_make_metrics_eval_fn())
 
@@ -142,6 +156,6 @@ def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_librar
             dataset_name=dataset_name,
             target_fn=make_target(),
             evaluators=make_evaluators(),
-            metadata={config.variable.name: value, **variable_fixed},
+            metadata=run_context,
         )
         print(f"  [{config.variable.name}={value}] experiment: {run_id}")
