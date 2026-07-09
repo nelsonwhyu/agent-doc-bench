@@ -6,8 +6,9 @@ from typing import Any
 from agent_doc_bench.agent.base_agent import CodingTrace
 from agent_doc_bench.agent.claude_agent import ClaudeAgent
 from agent_doc_bench.config import ExperimentConfig
+from agent_doc_bench.reporting import metrics
 from agent_doc_bench.reporting.langsmith_reporter import LangSmithReporter
-from agent_doc_bench.scorers import llm_judge, pattern_scorer, syntax_scorer
+from agent_doc_bench.scorers import execution_scorer, llm_judge, pattern_scorer, static_analysis_scorer, syntax_scorer
 from agent_doc_bench.scorers.base import run_scorer
 from agent_doc_bench.tasks.base_task import CodingTask
 from agent_doc_bench.tasks.task_registry import load_suite
@@ -16,10 +17,16 @@ from agent_doc_bench.tasks.task_registry import load_suite
 # feedback key it reports under and the scoring function itself. Every
 # scorer function takes (trace, task) and returns an object exposing
 # .score and .comment, so they can be run uniformly below.
+#
+# These are correctness graders, toggled per-experiment via config.scorers.
+# Tracked metrics (latency, token/turn counts) are separate: they're always
+# reported regardless of config.scorers, via _make_metrics_eval_fn below.
 SCORER_REGISTRY: dict[str, tuple[str, Any]] = {
     "syntax": ("syntax_score", lambda trace, task: syntax_scorer.score(trace)),
     "pattern": ("pattern_score", lambda trace, task: pattern_scorer.score(trace, task)),
     "llm_judge": ("llm_judge_score", lambda trace, task: llm_judge.score(trace, task)),
+    "static_analysis": ("static_analysis_score", lambda trace, task: static_analysis_scorer.score(trace)),
+    "execution": ("execution_score", lambda trace, task: execution_scorer.score(trace, task)),
 }
 
 
@@ -51,6 +58,19 @@ def _make_eval_fn(key: str, scorer_fn: Any, task_map: dict[str, CodingTask]):
         )
         result = run_scorer(key, lambda: _score_and_comment(scorer_fn, trace, task))
         return {"key": result.key, "score": result.score, "comment": result.comment}
+
+    return eval_fn
+
+
+def _make_metrics_eval_fn():
+    # Tracked metrics aren't correctness graders, so they're unconditional —
+    # not gated by config.scorers — mirroring the tracked_metrics/graders
+    # split in Anthropic's evals guide.
+    def eval_fn(run, example) -> list[dict]:
+        try:
+            return metrics.collect(run.outputs)
+        except Exception as e:
+            return [{"key": "metric_collection_error", "score": None, "comment": str(e)}]
 
     return eval_fn
 
@@ -98,6 +118,8 @@ def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_librar
                     "generated_code": trace.generated_code,
                     "steps": trace.steps,
                     "token_usage": trace.token_usage,
+                    "n_toolcalls": len(trace.tool_calls),
+                    "latency": trace.latency,
                     "error": trace.error,
                 }
             return target_fn
@@ -110,6 +132,8 @@ def run_experiment(config: ExperimentConfig, docs_base: Path = Path("docs_librar
                     continue
                 key, scorer_fn = SCORER_REGISTRY[name]
                 evals.append(_make_eval_fn(key, scorer_fn, task_map))
+
+            evals.append(_make_metrics_eval_fn())
 
             return evals
 

@@ -21,6 +21,9 @@ class CodingTrace:
     token_usage: dict
     tool_calls: list[ToolCall] = field(default_factory=list)
     error: str | None = None
+    # Latency metrics, in seconds / tokens-per-second. Populated by streaming
+    # agents; left empty ({}) by agents that don't support timing.
+    latency: dict = field(default_factory=dict)
 
 
 class BaseAgent(ABC):

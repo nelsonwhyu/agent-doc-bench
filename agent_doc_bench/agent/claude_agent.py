@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 import anthropic
 
@@ -47,14 +48,27 @@ class ClaudeAgent(BaseAgent):
         total_usage: dict = {"input_tokens": 0, "output_tokens": 0}
         steps = 0
 
+        run_start = time.perf_counter()
+        time_to_first_token: float | None = None
+
         while True:
             steps += 1
-            response = self._client.messages.create(
+            step_start = time.perf_counter()
+            first_chunk_at: float | None = None
+
+            with self._client.messages.stream(
                 model=self.model,
                 max_tokens=4096,
                 system=system,
                 messages=messages,
-            )
+            ) as stream:
+                for _ in stream.text_stream:
+                    if first_chunk_at is None:
+                        first_chunk_at = time.perf_counter()
+                response = stream.get_final_message()
+
+            if time_to_first_token is None and first_chunk_at is not None:
+                time_to_first_token = first_chunk_at - run_start
 
             total_usage["input_tokens"] += response.usage.input_tokens
             total_usage["output_tokens"] += response.usage.output_tokens
@@ -62,6 +76,19 @@ class ClaudeAgent(BaseAgent):
             text = "".join(
                 block.text for block in response.content if hasattr(block, "text")
             )
+
+            step_end = time.perf_counter()
+            total_seconds = step_end - run_start
+            generation_seconds = step_end - (first_chunk_at or step_start)
+            latency = {
+                "time_to_first_token": round(time_to_first_token, 4) if time_to_first_token is not None else None,
+                "time_to_last_token": round(total_seconds, 4),
+                "output_tokens_per_sec": (
+                    round(total_usage["output_tokens"] / generation_seconds, 2)
+                    if generation_seconds > 0
+                    else None
+                ),
+            }
 
             if response.stop_reason == "end_turn":
                 code = _extract_code(text)
@@ -72,6 +99,7 @@ class ClaudeAgent(BaseAgent):
                     token_usage=total_usage,
                     tool_calls=tool_calls,
                     error=None if code else "No code block found in response",
+                    latency=latency,
                 )
 
             messages.append({"role": "assistant", "content": text})
@@ -84,6 +112,7 @@ class ClaudeAgent(BaseAgent):
                     token_usage=total_usage,
                     tool_calls=tool_calls,
                     error="max steps exceeded",
+                    latency=latency,
                 )
 
 
