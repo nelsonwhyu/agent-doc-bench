@@ -239,9 +239,10 @@ agent-doc-bench record --task blpapi_open_session
 16. `sandbox/fixtures/blpapi_mock.py` + `execution_scorer.py` — scoped BLPAPI mock and execution grader  ✅
 17. `reporting/metrics.py` — tracked metrics (turns, tokens, latency), always-on  ✅
 18. `tools_ablation.yaml` is seeded but untested end-to-end — no scorer currently grades `CodingTrace.tool_calls`, so a tools ablation run wouldn't yet tell you whether the agent actually used the tool it was given
-19. Migrated `pyproject.toml` from Poetry to `uv` (PEP 621 + `hatchling`); `blpapi` added as an optional
-    `live` extra sourced from Bloomberg's own package index (`uv sync --extra live`), since it isn't on
-    PyPI and shouldn't block a default `uv sync`  ✅
+19. Migrated `pyproject.toml` from Poetry to `uv` (PEP 621 + `hatchling`); `blpapi` sourced from
+    Bloomberg's own package index via a uv dependency group (`[dependency-groups] live = ["blpapi"]`,
+    marked default via `[tool.uv] default-groups`), since it isn't on PyPI — a plain `uv sync` installs
+    it; opt out with `--no-default-groups` on a machine that can't reach Bloomberg's index  ✅
 20. `sandbox/fixtures/blpapi_live_shim.py` + `sandbox/live_runner.py` — live-mode execution against a
     real Bloomberg Terminal, with metadata-only capture so no market data reaches LangSmith  ✅
 
@@ -251,8 +252,7 @@ agent-doc-bench record --task blpapi_open_session
 
 ```bash
 cd agent-doc-bench
-uv sync                       # base install (mock mode only)
-uv sync --extra live          # + real blpapi SDK, for BLOOMBERG_MODE=live
+uv sync                        # installs everything, including real blpapi (default group)
 cp .env.example .env  # add ANTHROPIC_API_KEY + LANGSMITH_API_KEY
 
 # Smoke test: single task, no docs, mock mode

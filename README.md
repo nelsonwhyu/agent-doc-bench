@@ -80,13 +80,15 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design rationa
 ### 1. Install dependencies
 
 ```bash
-uv sync                   # base install — mock-mode execution only
-uv sync --extra live      # + real blpapi SDK, for BLOOMBERG_MODE=live against a real Terminal
+uv sync                          # installs everything, including real blpapi (default group)
+uv sync --no-default-groups      # skip blpapi — e.g. on a machine without Bloomberg index access
 ```
 
 `blpapi` isn't on PyPI — it's pulled from Bloomberg's own package index (configured in
-`pyproject.toml`'s `[tool.uv.sources]`/`[[tool.uv.index]]`) and is kept as an optional `live` extra so
-a default `uv sync` doesn't need network access to it.
+`pyproject.toml`'s `[tool.uv.sources]`/`[[tool.uv.index]]`) and lives in the `live` uv dependency
+group, marked default via `[tool.uv] default-groups = ["live"]` — so a plain `uv sync` always gives
+you a working `BLOOMBERG_MODE=live` environment without remembering an extra flag. Opt out with
+`--no-default-groups` on a machine that shouldn't (or can't) reach Bloomberg's index.
 
 ### 2. Configure credentials
 

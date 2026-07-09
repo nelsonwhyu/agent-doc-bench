@@ -19,14 +19,6 @@ dependencies = [
     "bandit>=1.8.0,<2.0.0",
 ]
 
-[project.optional-dependencies]
-# BLPAPI isn't on PyPI and requires Bloomberg's own package index (see
-# [tool.uv.sources]/[[tool.uv.index]] below); kept as an extra so a default
-# `uv sync` doesn't need network access to blpapi.bloomberg.com and works
-# fine for mock-mode (BLOOMBERG_MODE=mock) execution. Install with:
-#   uv sync --extra live
-live = ["blpapi"]
-
 [project.scripts]
 agent-doc-bench = "agent_doc_bench.cli:app"
 
@@ -36,6 +28,18 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_doc_bench"]
+
+[dependency-groups]
+# BLPAPI isn't on PyPI and requires Bloomberg's own package index (see
+# [tool.uv.sources]/[[tool.uv.index]] below). A uv dependency group rather
+# than a PEP 621 extra so it can be marked default (see [tool.uv] below) —
+# extras are always opt-in with no "install by default" option. Skip it on
+# a machine without access to blpapi.bloomberg.com (e.g. CI) with:
+#   uv sync --no-default-groups
+live = ["blpapi"]
+
+[tool.uv]
+default-groups = ["live"]
 
 [tool.uv.sources]
 blpapi = { index = "bloomberg" }

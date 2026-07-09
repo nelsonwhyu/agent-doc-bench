@@ -24,7 +24,7 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 live = [
     { name = "blpapi" },
 ]
@@ -33,7 +33,6 @@ live = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0,<0.41.0" },
     { name = "bandit", specifier = ">=1.8.0,<2.0.0" },
-    { name = "blpapi", marker = "extra == 'live'", index = "https://blpapi.bloomberg.com/repository/releases/python/simple" },
     { name = "click", specifier = "<8.2" },
     { name = "langsmith", specifier = ">=0.1.0,<0.2.0" },
     { name = "packaging", specifier = ">=24.0,<25.0" },
@@ -44,7 +43,9 @@ requires-dist = [
     { name = "ruff", specifier = ">=0.8.0,<0.9.0" },
     { name = "typer", specifier = ">=0.12,<0.13" },
 ]
-provides-extras = ["live"]
+
+[package.metadata.requires-dev]
+live = [{ name = "blpapi", index = "https://blpapi.bloomberg.com/repository/releases/python/simple" }]
 
 [[package]]
 name = "annotated-types"

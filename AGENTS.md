@@ -57,8 +57,8 @@ agent-doc-bench/
 ## Setup
 
 ```bash
-uv sync                    # base install — mock-mode execution only
-uv sync --extra live       # + real blpapi SDK (Bloomberg's own package index), for BLOOMBERG_MODE=live
+uv sync                        # installs everything, including real blpapi (default uv dependency group)
+uv sync --no-default-groups    # skip blpapi — e.g. on a machine without Bloomberg index access
 cp .env.example .env   # fill in ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 ```
 
