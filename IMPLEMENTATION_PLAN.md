@@ -277,3 +277,162 @@ uv run agent-doc-bench run experiments/doc_ablation.yaml
 # Verify locally without opening LangSmith's UI:
 uv run agent-doc-bench report experiments/doc_ablation.yaml
 ```
+
+---
+
+## Next Generation: PM-Facing Doc-Authoring Claude Desktop Extension
+
+**Status: design only, not yet implemented.** Recorded here so the approach is captured before building it.
+
+### Context
+
+Today only an engineer with Claude Code/shell access can realistically add or edit `docs_library/<api>/*.md` files, because:
+
+1. **Nothing tells a non-engineer what a doc file needs to contain.** The real requirements live in `task_suites/<api>/*.yaml` (`expected_patterns`, `anti_patterns`, `llm_judge_rubric`) — technical YAML, not something a PM can read.
+2. **There's no safe way for a PM to get content into the repo.** A PM would work from a separate machine, with no local checkout, collaborating via Claude Desktop (chat-only), not Claude Code.
+3. **A silent footgun exists today**: `_load_doc()` in `agent_doc_bench/runner.py:33-37` returns `""` (not an error) when a doc filename doesn't exactly match an experiment's `variable.values` entry. A wrong filename would silently run a "no docs" condition with no warning.
+
+The goal: let a PM author documentation variants conversationally in Claude Desktop, get plain-language guidance on what "good" means for each API's benchmark tasks, and safely propose changes — without touching git, YAML, or the engineering machine — while guaranteeing nothing lands on `main` without human review.
+
+**Design decisions:**
+- A full custom Claude Desktop Extension (locally-installed MCP server, `.mcpb` packaged) — not just docs/guardrails.
+- Repo needs to be pushed to GitHub as a prerequisite (not yet done — this is a separate, explicit action to confirm before Layer 2/3 work starts).
+- The extension talks to the GitHub API (not a local clone), so it works from a PM's separate machine.
+- Writes always go through a PR — nothing ever lands on `main` directly.
+- Includes a first-ever pytest suite for the new logic (none exists in the repo today).
+
+### Layer 1 — Repo-side validator + CLI guardrail
+
+New file `agent_doc_bench/docs_validator.py` — pure function, no CLI/MCP framework leakage, mirroring the shape of `agent_doc_bench/config.py`'s `ExperimentConfig.from_yaml()`:
+
+```python
+@dataclass
+class DocIssue:
+    experiment: str
+    api: str        # task_suite, doubles as docs_library subfolder
+    value: str       # the variable.values entry, e.g. "v1"
+    kind: str        # "missing" | "empty_non_none" | "stub"
+    path: Path
+    detail: str
+
+def validate_docs(experiments_dir=Path("experiments"), docs_base=Path("docs_library"),
+                   stub_threshold_chars=200) -> list[DocIssue]:
+    ...
+```
+
+For every `experiments/*.yaml` whose `variable.name == "documentation"`, for each `value` in `variable.values`, check `docs_base/<task_suite>/<value>.md`:
+- **missing** — file doesn't exist (the exact `_load_doc()` footgun, turned into a hard failure).
+- **empty_non_none** — file is empty/whitespace and `value != "none"` (empty `none.md` is required and correct — never flag it).
+- **stub** — file is non-empty but trivially short / contains a `> **Stub.**` marker (heuristic; treat as a warning, not a hard failure — today's `docs_library/blpapi/v2.md` should trip this).
+
+Never raises on one bad file — collects all issues, mirroring the failure-isolation pattern in `agent_doc_bench/scorers/base.py`'s `run_scorer()`.
+
+CLI wiring in `agent_doc_bench/cli.py`: new `@app.command(name="validate-docs")`, following the existing thin-command style (`run`/`report`: parse args, defer heavy imports into the function body, print via the shared `rich.Console`). Non-strict: warns on `stub`, exits 1 only on `missing`/`empty_non_none`. `--strict` flag also fails on `stub`.
+
+### Layer 2 — MCP server (GitHub-backed, PR-only writes)
+
+New top-level directory `mcp_server/` (sibling to `agent_doc_bench/`, not nested in it — different dependency footprint (`mcp`, `PyGithub`) and deployment target (bundled into a Desktop Extension) than the core benchmark library). Depends on `agent_doc_bench` as a library (imports `docs_validator.validate_docs`, `doc_requirements.build_doc_requirements`, `tasks.task_registry.load_suite`) — never the reverse.
+
+Add an optional Poetry dependency group so a plain `poetry install` for benchmark work doesn't pull these in:
+```toml
+[tool.poetry.group.mcp_server]
+optional = true
+[tool.poetry.group.mcp_server.dependencies]
+mcp = "^1.0"
+PyGithub = "^2.4"
+```
+
+New file `agent_doc_bench/doc_requirements.py` — `build_doc_requirements(api, base_dir=Path("task_suites")) -> str`. Generates a plain-language Markdown checklist **on the fly** from `task_registry.load_suite(api)` — no new YAML schema field. Rationale: `expected_patterns[].label` / `anti_patterns[].label` are already human-readable (e.g. `"instantiates blpapi.Session"`), and `llm_judge_rubric` is already prose — passing them through avoids a second source of truth that would drift from the real pattern/rubric definitions, and avoids touching `task_suites/*.yaml`'s existing 4-field convention (`AGENTS.md`: "Tasks are data, not code").
+
+Tools exposed by `mcp_server/server.py` (using the official `mcp` Python SDK's `FastMCP`, stdio transport):
+
+| Tool | Purpose |
+|---|---|
+| `list_apis()` | List `docs_library/` subfolders via GitHub Contents API |
+| `list_experiments()` | List `experiments/*.yaml`, their swept variable + values |
+| `get_doc_requirements(api)` | Plain-language checklist — fetches `task_suites/<api>/*.yaml` into a temp dir, calls `doc_requirements.build_doc_requirements` against it |
+| `list_doc_variants(api)` | Existing `docs_library/<api>/*.md` filenames |
+| `get_doc_variant(api, version)` | Raw content of an existing variant |
+| `validate_doc_variant(api, version, content)` | Dry-run the validator against proposed content, no GitHub write — lets the PM self-correct before committing to a PR |
+| `propose_doc_variant(api, version, content, summary)` | The one write path — see flow below |
+
+`propose_doc_variant` flow (`mcp_server/github_client.py` wraps PyGithub for `fetch_file`/`list_dir`/branch/PR helpers):
+1. Fetch current `docs_library/<api>/` + `experiments/*.yaml` via GitHub API; warn (don't block) if `version` isn't referenced by any experiment's `variable.values` — such a variant would never actually get used by `_load_doc()`.
+2. Materialize a `tempfile.TemporaryDirectory()` shaped like `docs_base/<api>/`, overlay the proposed content.
+3. Call `docs_validator.validate_docs(docs_base=<tmp>, strict=True)` — same function the CLI uses, no duplicated logic. Hard failures reject the call before anything touches GitHub.
+4. Create branch `docs/<api>-<version>-<short suffix>` off the default branch HEAD.
+5. Create/update `docs_library/<api>/<version>.md` on that branch.
+6. Open a PR into the default branch (never merges) with a body including the PM's `summary` and which `get_doc_requirements` items were targeted. Returns the PR URL.
+
+`MCP_DRY_RUN=1` env var: skips steps 4-6, returns a synthetic "would open PR titled X" response — the mechanism for testing the full tool logic without a real GitHub write.
+
+PAT scope (documented in `mcp_server/README.md`): fine-grained PAT scoped to this one repo only — Contents: Read/write, Pull requests: Read/write. Nothing else.
+
+### Layer 3 — Desktop Extension packaging
+
+`mcp_server/manifest.json` (Desktop Extension / `.mcpb` spec): declares the 7 tools, and `user_config` for `repo_owner`, `repo_name`, and `github_pat` (marked `sensitive: true`, templated into `GITHUB_TOKEN`/`GITHUB_OWNER`/`GITHUB_REPO` env vars at process spawn). Verify exact manifest field names against the current published spec at build time.
+
+Packaging: `@anthropic-ai/mcpb` CLI (`npx @anthropic-ai/mcpb pack mcp_server/ agent-doc-bench-docs.mcpb`), bundling a vendored `lib/` of Python deps (including `agent_doc_bench` itself) so the PM doesn't need Python/poetry installed locally — the PM persona is explicitly non-technical.
+
+PM install steps (documented in `mcp_server/README.md`):
+1. Receive the built `.mcpb` from an engineer.
+2. Claude Desktop → Settings → Extensions → install from file.
+3. Fill in `user_config`: repo owner/name, and a fine-grained PAT the PM creates themselves (one-time manual GitHub UI step — worth a short annotated doc since this is the one place the PM touches raw GitHub).
+4. Chat naturally: "what does the blpapi docs need to cover?" → `get_doc_requirements`; "here's a draft, open a PR" → `propose_doc_variant`.
+
+### New/modified files (planned)
+
+```
+agent_doc_bench/
+├── docs_validator.py          NEW
+├── doc_requirements.py        NEW
+└── cli.py                     MODIFIED — add `validate-docs` command
+
+docs_library/
+├── README.md                  NEW — format conventions, points at get_doc_requirements/validate-docs
+└── TEMPLATE.md                NEW — skeleton mirroring v1.md's section shape
+
+mcp_server/                    NEW top-level dir
+├── server.py                  FastMCP tool definitions
+├── github_client.py           PyGithub wrapper
+├── manifest.json              Desktop Extension manifest
+├── README.md                  PAT setup + install steps + dry-run testing
+└── tests/
+    └── test_server_dry_run.py
+
+tests/
+└── test_docs_validator.py     NEW — first test file in the repo
+
+pyproject.toml                 MODIFIED — optional `mcp_server` group (mcp, PyGithub); pytest as dev dep
+AGENTS.md                      MODIFIED — add "Doc authoring via Claude Desktop extension" pointer + validate-docs in Common commands
+README.md                      MODIFIED — mention validate-docs, link mcp_server/README.md
+```
+
+### Implementation steps
+
+1. Push repo to GitHub (prerequisite for Layers 2/3 — confirm timing separately)
+2. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`
+3. `cli.py` — `validate-docs` command
+4. `tests/test_docs_validator.py` — pytest added as dev dependency; covers `v2.md` stub flag, `none.md` exemption, filename-mismatch footgun
+5. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels
+6. `mcp_server/` scaffold — `server.py`, `github_client.py`, optional Poetry dependency group
+7. `propose_doc_variant` write flow (branch → validate → commit → PR), `MCP_DRY_RUN` support
+8. `mcp_server/tests/test_server_dry_run.py` — all 7 tools exercised without real GitHub calls
+9. `mcp_server/manifest.json` + packaging via `@anthropic-ai/mcpb`
+10. `docs_library/README.md` + `TEMPLATE.md`; `AGENTS.md`/`README.md` pointers
+11. One manual smoke test of the real write path against a throwaway/test repo once GitHub hosting exists
+
+### Verification (once implemented)
+
+1. `tests/test_docs_validator.py`: `validate_docs()` against the real `experiments/`/`docs_library/` flags `docs_library/blpapi/v2.md` as `kind="stub"`; `none.md` is not flagged despite being empty; a deliberately mismatched filename is flagged `kind="missing"`.
+2. `doc_requirements.build_doc_requirements("blpapi")` test asserts output contains known pattern labels (e.g. `"instantiates blpapi.Session"`).
+3. `mcp_server/tests/test_server_dry_run.py`: drive the server via the `mcp` SDK's client session over stdio (or the official MCP Inspector for manual poking), with `MCP_DRY_RUN=1` and `github_client` mocked/pointed at local disk for read tools.
+4. `poetry run agent-doc-bench validate-docs` against the repo as-is prints the `v2.md` stub warning, exits 0; `--strict` exits 1.
+5. One manual smoke test of the real write path (`MCP_DRY_RUN=0`) against a throwaway/test repo — confirm a real PR appears, nothing touches `main`, and the PAT can't do anything beyond Contents+PRs on that repo.
+
+### Open risks
+
+- **GitHub push is a prerequisite outside this design** — nothing in Layer 2/3 works until the repo has a remote.
+- **PAT storage**: `sensitive: true` in the manifest keeps Claude Desktop from displaying/logging the token, but verify how Desktop actually stores `user_config` secrets before treating this as fully solved.
+- **Stub-detection is a heuristic** (character count + marker match) — expect some false positives/negatives; keep it a warning, not a hard failure, outside `--strict`.
+- **`llm_judge_rubric` passthrough** assumes existing rubric prose is PM-readable — confirmed for `auth_tasks.yaml`; worth a quick read-through of `data_tasks.yaml`/`pattern_tasks.yaml` rubrics before shipping to confirm they're equally plain-language.
