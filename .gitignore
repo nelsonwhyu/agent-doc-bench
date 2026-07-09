@@ -11,3 +11,4 @@ build/
 *.egg-info/
 .claude/
 .vscode/
+agent_doc_bench/sandbox/.live_logs/

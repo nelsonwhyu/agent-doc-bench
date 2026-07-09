@@ -19,7 +19,7 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 
 ```
 agent-doc-bench/
-├── pyproject.toml                  # Python 3.11+, Poetry
+├── pyproject.toml                  # Python 3.11+, uv (PEP 621 + hatchling)
 ├── .env.example                    # ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 │
 ├── agent_doc_bench/
@@ -45,8 +45,10 @@ agent-doc-bench/
 │   │
 │   ├── sandbox/
 │   │   ├── executor.py             # subprocess runner: executes Python, captures stdout/stderr/exit code
+│   │   ├── live_runner.py          # Live-mode entrypoint: installs instrumentation, runs generated.py
 │   │   └── fixtures/
-│   │       └── blpapi_mock.py      # Scoped mock of the `blpapi` module for execution_scorer
+│   │       ├── blpapi_mock.py      # Scoped mock of the `blpapi` module for execution_scorer (BLOOMBERG_MODE=mock)
+│   │       └── blpapi_live_shim.py # Wraps real blpapi.Session to log event/timing metadata only (BLOOMBERG_MODE=live)
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
@@ -140,10 +142,31 @@ reports uniformly as LangSmith feedback `{key, score, comment}`.
 | `PatternScorer` | `generated_code` + task patterns | score 0–1 per pattern group | Counts matched expected / anti-pattern hits |
 | `LLMJudgeScorer` | `generated_code` + task rubric | structured grades (Pydantic) | Uses `claude-haiku-4-5` as judge for speed |
 | `StaticAnalysisScorer` | `generated_code` | score 0–1 + issue list | `ruff` (pyflakes only) + `bandit` (security); no type-checker since BLPAPI has no stubs |
-| `ExecutionScorer` | `generated_code` + `sandbox/fixtures/blpapi_mock.py` | pass/fail + stdout/stderr tail | Runs the script against a scoped BLPAPI mock in a subprocess; catches behavioral bugs (e.g. an event loop that never breaks) that regex can't. Mock coverage is limited to the request/response shapes the current task suite exercises — calls outside that raise a distinctly `"blpapi_mock:"`-prefixed error so a mock gap is distinguishable from a real defect |
+| `ExecutionScorer` | `generated_code` + `sandbox/fixtures/blpapi_mock.py` (or real `blpapi`, live mode) | pass/fail + comment | Runs the script in a subprocess. Catches behavioral bugs (e.g. an event loop that never breaks) that regex can't. See "Execution modes" below for mock vs. live |
 
 Toggled per-experiment via `scorers: [...]` in the experiment config — a task suite for a different
 API would swap in its own mock/executor rather than reusing `blpapi_mock.py`.
+
+### Execution modes: mock vs. live
+
+`ExecutionScorer` branches on the `BLOOMBERG_MODE` env var (`.env.example`):
+
+- **`mock` (default).** `sandbox/fixtures/blpapi_mock.py` is written into the sandbox as `blpapi.py`,
+  shadowing the real package, and the generated script runs against it directly. Coverage is limited
+  to the request/response shapes the current task suite exercises — calls outside that raise a
+  distinctly `"blpapi_mock:"`-prefixed error so a mock gap is distinguishable from a real defect. This
+  is the CI/default path and needs no Bloomberg Terminal.
+- **`live`.** Runs against a real Bloomberg Terminal via the real `blpapi` SDK (installed via the
+  `live` extra, see Setup). Because the script's own stdout/stderr may contain real market data (e.g.
+  a printed price), the scorer never reads them into `.comment` — nothing derived from a live run
+  reaches LangSmith except the exit code and *structural* session metadata (event types, message
+  counts, elapsed time). This is captured by `sandbox/fixtures/blpapi_live_shim.py`, which monkeypatches
+  `blpapi.Session.start/stop/sendRequest/nextEvent` to log shape/timing only — never field values — to
+  a JSON file the scorer reads. `sandbox/live_runner.py` is the actual subprocess entrypoint in live
+  mode: it installs the shim, then runs `generated.py` via `runpy`, flushing metadata even on failure.
+  Raw stdout/stderr are written only to a local, gitignored log file
+  (`sandbox/.live_logs/<task_id>-<timestamp>.log`) referenced by *path only* in the comment, for local
+  debugging — never their contents.
 
 ---
 
@@ -215,6 +238,11 @@ agent-doc-bench record --task blpapi_open_session
 16. `sandbox/fixtures/blpapi_mock.py` + `execution_scorer.py` — scoped BLPAPI mock and execution grader  ✅
 17. `reporting/metrics.py` — tracked metrics (turns, tokens, latency), always-on  ✅
 18. `tools_ablation.yaml` is seeded but untested end-to-end — no scorer currently grades `CodingTrace.tool_calls`, so a tools ablation run wouldn't yet tell you whether the agent actually used the tool it was given
+19. Migrated `pyproject.toml` from Poetry to `uv` (PEP 621 + `hatchling`); `blpapi` added as an optional
+    `live` extra sourced from Bloomberg's own package index (`uv sync --extra live`), since it isn't on
+    PyPI and shouldn't block a default `uv sync`  ✅
+20. `sandbox/fixtures/blpapi_live_shim.py` + `sandbox/live_runner.py` — live-mode execution against a
+    real Bloomberg Terminal, with metadata-only capture so no market data reaches LangSmith  ✅
 
 ---
 
@@ -222,11 +250,12 @@ agent-doc-bench record --task blpapi_open_session
 
 ```bash
 cd agent-doc-bench
-poetry install
+uv sync                       # base install (mock mode only)
+uv sync --extra live          # + real blpapi SDK, for BLOOMBERG_MODE=live
 cp .env.example .env  # add ANTHROPIC_API_KEY + LANGSMITH_API_KEY
 
 # Smoke test: single task, no docs, mock mode
-agent-doc-bench run experiments/doc_ablation.yaml
+uv run agent-doc-bench run experiments/doc_ablation.yaml
 
 # Expected: LangSmith experiment appears with 3 rows (none/v1/v2)
 # Each row shows syntax_score, pattern_score, llm_judge_score,

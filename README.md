@@ -20,7 +20,7 @@ The initial use case benchmarks Bloomberg BLPAPI documentation, but the framewor
 
 ```
 agent-doc-bench/
-├── pyproject.toml                  # Python 3.11+, Poetry
+├── pyproject.toml                  # Python 3.11+, uv (PEP 621 + hatchling)
 ├── .env.example                    # ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 │
 ├── agent_doc_bench/
@@ -46,8 +46,10 @@ agent-doc-bench/
 │   │
 │   ├── sandbox/
 │   │   ├── executor.py             # subprocess runner: executes Python, captures stdout/stderr/exit code
+│   │   ├── live_runner.py          # Live-mode entrypoint: installs instrumentation, runs generated.py
 │   │   └── fixtures/
-│   │       └── blpapi_mock.py      # Scoped mock of the `blpapi` module for execution_scorer
+│   │       ├── blpapi_mock.py      # Scoped mock of the `blpapi` module (BLOOMBERG_MODE=mock)
+│   │       └── blpapi_live_shim.py # Metadata-only instrumentation for a real Terminal (BLOOMBERG_MODE=live)
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
@@ -78,8 +80,13 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design rationa
 ### 1. Install dependencies
 
 ```bash
-poetry install
+uv sync                   # base install — mock-mode execution only
+uv sync --extra live      # + real blpapi SDK, for BLOOMBERG_MODE=live against a real Terminal
 ```
+
+`blpapi` isn't on PyPI — it's pulled from Bloomberg's own package index (configured in
+`pyproject.toml`'s `[tool.uv.sources]`/`[[tool.uv.index]]`) and is kept as an optional `live` extra so
+a default `uv sync` doesn't need network access to it.
 
 ### 2. Configure credentials
 
@@ -91,12 +98,16 @@ Fill in `.env` with:
 - `ANTHROPIC_API_KEY` — used to run the coding agent (and the LLM judge)
 - `LANGSMITH_API_KEY` — used to record and compare experiment results
 - `LANGSMITH_PROJECT` — defaults to `agent-doc-bench`
-- `BLOOMBERG_MODE` — `mock` (default) or `live`, if you're running against real Bloomberg fixtures
+- `BLOOMBERG_MODE` — `mock` (default, no Terminal needed) or `live`, to run generated code against a
+  real Bloomberg Terminal. In live mode, the generated script's own stdout/stderr (which may contain
+  real market data) never leaves the sandbox or reaches LangSmith — only pass/fail and structural
+  session metadata (event types, message counts, timing) are reported; raw output is written to a
+  local, gitignored log under `agent_doc_bench/sandbox/.live_logs/` for local debugging only.
 
 ### 3. Run an ablation experiment
 
 ```bash
-poetry run agent-doc-bench run experiments/doc_ablation.yaml
+uv run agent-doc-bench run experiments/doc_ablation.yaml
 ```
 
 This runs every task in the experiment's task suite once per value of the swept variable, scores each result, and pushes the run to LangSmith.
@@ -104,7 +115,7 @@ This runs every task in the experiment's task suite once per value of the swept 
 ### 4. View results
 
 ```bash
-poetry run agent-doc-bench report --experiment doc_ablation
+uv run agent-doc-bench report --experiment doc_ablation
 ```
 
 Or open the LangSmith project directly to compare runs side by side.
@@ -119,4 +130,7 @@ Or open the LangSmith project directly to compare runs side by side.
 Note: `execution_scorer.py` currently runs against `sandbox/fixtures/blpapi_mock.py`, which is scoped
 specifically to BLPAPI's request/response shapes. For a new API, either write an equivalent mock (if
 the API can't be executed directly, e.g. it requires a live connection) or drop `execution` from that
-experiment's `scorers` list until one exists.
+experiment's `scorers` list until one exists. If the new API does support a real, sandboxable live
+connection, `blpapi_live_shim.py` is a template for metadata-only instrumentation — mirror its
+pattern of monkeypatching only for event/timing metadata, never forwarding real response data into
+the scorer's comment.

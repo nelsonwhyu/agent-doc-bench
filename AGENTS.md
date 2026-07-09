@@ -14,7 +14,7 @@ Full design rationale, data model, and scorer pipeline reference: [IMPLEMENTATIO
 
 ```
 agent-doc-bench/
-├── pyproject.toml                  # Python 3.11+, Poetry
+├── pyproject.toml                  # Python 3.11+, uv (PEP 621 + hatchling)
 ├── .env.example                    # ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 │
 ├── agent_doc_bench/
@@ -40,8 +40,10 @@ agent-doc-bench/
 │   │
 │   ├── sandbox/
 │   │   ├── executor.py             # subprocess runner: executes Python, captures stdout/stderr/exit code
+│   │   ├── live_runner.py          # Live-mode entrypoint (BLOOMBERG_MODE=live): installs instrumentation, runs generated.py
 │   │   └── fixtures/
-│   │       └── blpapi_mock.py      # Scoped mock of the `blpapi` module — see caveats below
+│   │       ├── blpapi_mock.py      # Scoped mock of the `blpapi` module — see caveats below
+│   │       └── blpapi_live_shim.py # Wraps real blpapi.Session for metadata-only capture — see caveats below
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
@@ -55,7 +57,8 @@ agent-doc-bench/
 ## Setup
 
 ```bash
-poetry install
+uv sync                    # base install — mock-mode execution only
+uv sync --extra live       # + real blpapi SDK (Bloomberg's own package index), for BLOOMBERG_MODE=live
 cp .env.example .env   # fill in ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 ```
 
@@ -63,10 +66,10 @@ cp .env.example .env   # fill in ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 
 ```bash
 # Run an ablation experiment (pushes results to LangSmith)
-poetry run agent-doc-bench run experiments/doc_ablation.yaml
+uv run agent-doc-bench run experiments/doc_ablation.yaml
 
 # Summarize a past experiment
-poetry run agent-doc-bench report --experiment doc_ablation
+uv run agent-doc-bench report --experiment doc_ablation
 ```
 
 There is currently no automated test suite — verify changes by running the smoke-test experiment above and confirming a LangSmith run appears with expected scorer output (see "Verification" in IMPLEMENTATION_PLAN.md).
@@ -77,6 +80,7 @@ There is currently no automated test suite — verify changes by running the smo
 - **Scorers are independent and composable** (`syntax_scorer`, `pattern_scorer`, `llm_judge`, `static_analysis_scorer`, `execution_scorer`), toggled per-experiment via `scorers: [...]`. New scorers should return an object exposing `.score` and `.comment` (see `scorers/base.py`), take `(trace, task)` or a subset, and not depend on other scorers — `runner.py` wraps every scorer call in `run_scorer()` so one raising an exception can't abort the whole eval run.
 - **Tracked metrics are not scorers.** `reporting/metrics.py` reports turn count, token usage, and latency unconditionally, regardless of `config.scorers` — they measure cost/speed, not correctness, so don't gate them behind the scorers list.
 - **The `execution_scorer` mock is scope-limited.** `sandbox/fixtures/blpapi_mock.py` only covers the request/response shapes the current `task_suites/blpapi/*.yaml` tasks exercise. If you add a task that needs a BLPAPI call the mock doesn't support, extend the mock — don't work around it in the scorer. A failure whose stderr contains `"blpapi_mock:"` means the mock is missing coverage, not that the generated code is wrong; keep that distinction when adding new mocked calls (raise `NotImplementedError` with the same prefix rather than silently guessing behavior).
+- **Live-mode execution must never leak real data to LangSmith.** When `BLOOMBERG_MODE=live`, `execution_scorer.py` runs generated code against a real Bloomberg Terminal via `sandbox/live_runner.py` + `sandbox/fixtures/blpapi_live_shim.py`. The generated script's `stdout`/`stderr` may contain real market data and must never be read into `ExecutionResult.comment` (or any other LangSmith-visible field) — only exit code + the shim's structural metadata (event types, message counts, timing) may cross that boundary. Raw output goes only to the local, gitignored `sandbox/.live_logs/` directory. If you touch this path, preserve that boundary; don't add a "just print the stderr tail" fallback like the mock-mode scorer has.
 - **Tasks are data, not code.** New coding tasks belong in `task_suites/<api>/*.yaml`, not hardcoded in Python. Each task needs `expected_patterns`, `anti_patterns`, and an `llm_judge_rubric`.
 - **Docs variants are plain Markdown** under `docs_library/<api>/`, including an empty `none.md` baseline for every API — it's the no-doc control group and ablations depend on it existing. Note `docs_library/blpapi/v2.md` is still a stub placeholder — replace it with real content before treating `doc_ablation`'s v1-vs-v2 comparison as meaningful.
 - Keep `agent/base_agent.py`'s `CodingTrace` output contract (`generated_code`, `language`, `steps`, `token_usage`, `tool_calls`, `error`, `latency`) stable — scorers, `metrics.py`, and the LangSmith reporter all consume it directly.
