@@ -7,6 +7,19 @@ the transcript/latency metrics split described in Anthropic's evals guide.
 """
 
 
+# Every key collect() can emit, in a stable order — kept here (rather than
+# re-derived elsewhere, e.g. results_fetcher.py) so callers that need the
+# full key set can't drift out of sync with what collect() actually reports.
+KEYS = [
+    "metric_n_turns",
+    "metric_n_toolcalls",
+    "metric_n_total_tokens",
+    "metric_time_to_first_token",
+    "metric_time_to_last_token",
+    "metric_output_tokens_per_sec",
+]
+
+
 def collect(run_outputs: dict) -> list[dict]:
     token_usage = run_outputs.get("token_usage") or {}
     latency = run_outputs.get("latency") or {}

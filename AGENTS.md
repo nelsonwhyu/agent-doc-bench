@@ -47,7 +47,9 @@ agent-doc-bench/
 │   │
 │   └── reporting/
 │       ├── langsmith_reporter.py   # evaluate() wrapper, tags experiments
-│       └── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── metrics.py              # Tracked metrics (latency, tokens, turns) — always-on, not a grader
+│       ├── results_fetcher.py      # Reads scores/comments/code back from LangSmith into plain dataclasses
+│       └── report_formatters.py    # Renders results_fetcher output as a rich table, JSON, or Markdown
 │
 ├── docs_library/<api>/*.md         # Documentation variants injected into the agent's system prompt
 ├── task_suites/<api>/*.yaml        # Coding task definitions (instruction, patterns, rubric)
@@ -68,8 +70,12 @@ cp .env.example .env   # fill in ANTHROPIC_API_KEY, LANGSMITH_API_KEY
 # Run an ablation experiment (pushes results to LangSmith)
 uv run agent-doc-bench run experiments/doc_ablation.yaml
 
-# Summarize a past experiment
-uv run agent-doc-bench report --experiment doc_ablation
+# Summarize a past experiment (scored table: summary + per-task detail)
+uv run agent-doc-bench report experiments/doc_ablation.yaml
+
+# Machine-readable export, e.g. for a PM to paste into an LLM chat for interpretation
+uv run agent-doc-bench report experiments/doc_ablation.yaml --format markdown
+uv run agent-doc-bench report experiments/doc_ablation.yaml --format json --output report.json
 ```
 
 There is currently no automated test suite — verify changes by running the smoke-test experiment above and confirming a LangSmith run appears with expected scorer output (see "Verification" in IMPLEMENTATION_PLAN.md).
