@@ -380,6 +380,18 @@ PM install steps (documented in `mcp_server/README.md`):
 3. Fill in `user_config`: repo owner/name, and a fine-grained PAT the PM creates themselves (one-time manual GitHub UI step — worth a short annotated doc since this is the one place the PM touches raw GitHub).
 4. Chat naturally: "what does the blpapi docs need to cover?" → `get_doc_requirements`; "here's a draft, open a PR" → `propose_doc_variant`.
 
+### Alternative: multi-client support (Claude Desktop + ChatGPT)
+
+The 7-tool design and the GitHub-PR write flow are protocol-level (plain MCP) and portable — they aren't Claude-specific. The `.mcpb` **packaging** in Layer 3 is, though: it's a local stdio process Claude Desktop spawns and installs from a file, which ChatGPT has no equivalent for. OpenAI's MCP support in ChatGPT ("connectors," currently Team/Enterprise/Pro tiers) expects a **remote HTTP/SSE MCP server** reachable at a URL, typically with OAuth-style auth rather than the `sensitive: true` env-var PAT field the Desktop Extension manifest uses.
+
+If PM usage ever needs to span both clients, the design should shift from "local process bundled as `.mcpb`" to "one hosted HTTP service, registered two ways":
+- Same `mcp_server/server.py` tool logic, served over HTTP/SSE instead of stdio, deployed somewhere reachable (not spawned locally).
+- Claude Desktop: still installable as a thin `.mcpb` extension, or added directly as a remote connector pointing at the hosted URL.
+- ChatGPT: added as a custom connector pointing at the same hosted URL.
+- Auth moves from a raw PAT typed into `user_config` to an OAuth flow in front of the GitHub PAT (or a scoped backend service account), since ChatGPT's connector model expects OAuth, not a pasted secret.
+
+This is a materially bigger lift than the local-only design above (hosting, uptime, OAuth) — worth doing only once it's confirmed a PM will actually be on ChatGPT rather than speculatively.
+
 ### New/modified files (planned)
 
 ```
