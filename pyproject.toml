@@ -12,6 +12,7 @@ anthropic = "^0.40.0"
 langsmith = "^0.1.0"
 pydantic = "^2.0"
 typer = { extras = ["all"], version = "^0.12" }
+click = "<8.2"
 pyyaml = "^6.0"
 python-dotenv = "^1.0"
 rich = "^13.0"

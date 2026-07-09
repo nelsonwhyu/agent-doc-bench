@@ -41,13 +41,16 @@ def report(
     client = Client()
     console.print(f"Fetching results for: [bold]{experiment}[/bold]\n")
 
-    runs = list(client.list_runs(project_name="agent-doc-bench", filter=f'name:"{experiment}"'))
-    if not runs:
-        console.print("[red]No runs found.[/red]")
+    # Each ablation run creates its own LangSmith experiment (a TracerSession
+    # named "{experiment}__{variable}_{value}-{suffix}"), not a run inside a
+    # shared project — so experiments are looked up via list_projects.
+    sessions = list(client.list_projects(name_contains=experiment))
+    if not sessions:
+        console.print("[red]No experiments found.[/red]")
         raise typer.Exit(1)
 
-    for run in runs:
-        console.print(f"  {run.name}  —  {run.status}")
+    for session in sessions:
+        console.print(f"  {session.name}  —  started {session.start_time}")
 
 
 if __name__ == "__main__":

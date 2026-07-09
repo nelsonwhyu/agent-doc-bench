@@ -2,7 +2,7 @@ name: doc_ablation
 task_suite: blpapi
 variable:
   name: documentation
-  values: [none, v1, v2]        # maps to docs_library/blpapi/{value}.md
+  values: [none, v1] # maps to docs_library/blpapi/{value}.md
 fixed:
   model: claude-sonnet-4-6
   tools: none
