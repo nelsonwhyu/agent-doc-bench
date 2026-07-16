@@ -28,8 +28,8 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 2. ~~`agent_doc_bench/doc_source.py` — seam for reading named doc variants~~ ✅
 3. ~~`agent_doc_bench/docs_validator.py` + `validate-docs` CLI command~~ ✅
 4. ~~First pytest suite (`tests/test_docs_validator.py`)~~ ✅ — 5 tests, all passing; `uv run pytest tests/`
-5. `agent_doc_bench/doc_requirements.py` — plain-language checklist generator **(up next)**
-6. `mcp_server/` scaffold — read-only tools (`list_apis`, `get_doc_requirements`, `list_doc_variants`, `get_doc_variant`, `validate_doc_variant`)
+5. ~~`agent_doc_bench/doc_requirements.py` — plain-language checklist generator~~ ✅ — advisory reference, not a spec
+6. `mcp_server/` scaffold **(up next)** — read-only tools (`list_apis`, `get_doc_requirements`, `list_doc_variants`, `get_doc_variant`, `validate_doc_variant`)
 7. `.github/workflows/evaluate-doc-draft.yml` — runs an ablation on demand, commits nothing
 8. `mcp_server/actions_client.py` + the evaluate/status/report tools
 9. Decide hosting for the MCP server + wire OAuth
@@ -486,7 +486,7 @@ README.md                      MODIFIED — mention validate-docs, link mcp_serv
 3. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`  ✅
 4. `cli.py` — `validate-docs` command  ✅
 5. `tests/test_docs_validator.py` — pytest added as dev dependency; covers stub flag (`v1.md`'s own `**Stub.**` marker), `none.md` exemption, filename-mismatch footgun  ✅ (`v2.md` isn't currently referenced by any experiment's `variable.values`, so it's out of scope for the validator today — see note below)
-6. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels
+6. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels  ✅ (explicitly framed as advisory reference, not a spec — a writer is free to phrase docs however reads best; only the resulting generated code is ever scored, never doc wording)
 7. `mcp_server/` scaffold — `server.py` (HTTP/SSE), `github_client.py` (read-only, calls through `doc_source.py`), optional uv dependency group
 8. `.github/workflows/evaluate-doc-draft.yml` — `repository_dispatch` handler: local-only file write, validate gate, mock-mode run, JSON report artifact, no commit/push
 9. `mcp_server/actions_client.py` + `evaluate_doc_draft`/`get_evaluation_status`/`get_evaluation_report` tools
