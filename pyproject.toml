@@ -38,9 +38,19 @@ packages = ["agent_doc_bench"]
 #   uv sync --no-default-groups
 live = ["blpapi"]
 dev = ["pytest>=8.0,<9.0"]
+# Separate deployment target (a hosted service, not the benchmark CLI) — kept
+# out of default-groups so a plain `uv sync` for benchmark work doesn't pull
+# these in. Install explicitly with `uv sync --group mcp_server`.
+mcp_server = ["mcp>=1.0", "PyGithub>=2.4"]
 
 [tool.uv]
 default-groups = ["live", "dev"]
+
+[tool.pytest.ini_options]
+# mcp_server/tests/ needs the optional mcp_server dependency group installed
+# (`uv sync --group mcp_server`), so it's excluded from the default `pytest`
+# run — run it explicitly with `uv run pytest mcp_server/tests`.
+testpaths = ["tests"]
 
 [tool.uv.sources]
 blpapi = { index = "bloomberg" }

@@ -10,6 +10,29 @@ from agent_doc_bench.doc_source import get_variant, list_variants
 STUB_MARKER = "**Stub.**"
 
 
+def _is_stub(content: str, stub_threshold_chars: int) -> bool:
+    stripped = content.strip()
+    return bool(stripped) and (STUB_MARKER in content or len(stripped) < stub_threshold_chars)
+
+
+def check_draft_content(content: str, stub_threshold_chars: int = 200) -> list[str]:
+    """Same empty/stub heuristics as validate_docs(), applied directly to a
+    content string a PM is drafting rather than to a named file on disk —
+    there's no path to look up and no "none" exemption, since a PM draft is
+    never meant to be the empty baseline. Returns human-readable issue
+    descriptions; an empty list means no issues found.
+    """
+    stripped = content.strip()
+
+    if not stripped:
+        return ["Draft is empty."]
+
+    if _is_stub(content, stub_threshold_chars):
+        return [f"Draft looks like a stub ({len(stripped)} chars) — consider adding more real guidance before evaluating."]
+
+    return []
+
+
 @dataclass
 class DocIssue:
     experiment: str
@@ -77,7 +100,7 @@ def validate_docs(
                     )
                 continue
 
-            if STUB_MARKER in content or len(stripped) < stub_threshold_chars:
+            if _is_stub(content, stub_threshold_chars):
                 issues.append(
                     DocIssue(
                         experiment=experiment,
