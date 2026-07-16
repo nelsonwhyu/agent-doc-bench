@@ -3,21 +3,39 @@ name: Evaluate doc draft
 on:
   repository_dispatch:
     types: [evaluate-doc-draft]
+  # Manual/engineer-triggered equivalent of the same event — also lets this
+  # workflow be tested (via `gh workflow run ... --ref <branch>`) before it's
+  # merged to the default branch, since repository_dispatch only fires for
+  # workflow files that already exist there.
+  workflow_dispatch:
+    inputs:
+      api:
+        required: true
+        type: string
+      value:
+        required: true
+        type: string
+      content:
+        required: true
+        type: string
+      experiment:
+        required: true
+        type: string
 
-# The PM's draft (github.event.client_payload.content) is untrusted text.
-# Per GitHub's script-injection guidance, it only ever crosses through the
-# `env:` mapping below — a single, safe substitution into a real
-# environment variable — and gets read back out via os.environ in
+# The PM's draft (client_payload.content / inputs.content) is untrusted
+# text. Per GitHub's script-injection guidance, it only ever crosses
+# through the `env:` mapping below — a single, safe substitution into a
+# real environment variable — and gets read back out via os.environ in
 # apply_draft.py. It is never interpolated directly into a `run:` shell
 # string, and this job never commits or pushes anything.
 jobs:
   evaluate:
     runs-on: ubuntu-latest
     env:
-      DRAFT_API: ${{ github.event.client_payload.api }}
-      DRAFT_VALUE: ${{ github.event.client_payload.value }}
-      DRAFT_CONTENT: ${{ github.event.client_payload.content }}
-      DRAFT_EXPERIMENT: ${{ github.event.client_payload.experiment }}
+      DRAFT_API: ${{ github.event.inputs.api || github.event.client_payload.api }}
+      DRAFT_VALUE: ${{ github.event.inputs.value || github.event.client_payload.value }}
+      DRAFT_CONTENT: ${{ github.event.inputs.content || github.event.client_payload.content }}
+      DRAFT_EXPERIMENT: ${{ github.event.inputs.experiment || github.event.client_payload.experiment }}
       BLOOMBERG_MODE: mock
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
