@@ -15,7 +15,78 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 
 ---
 
-## Project Structure
+## Status at a glance
+
+| Part | What it is | Status |
+|---|---|---|
+| [Part 1](#part-1--core-benchmark-shipped) | CLI-driven ablation framework: run tasks through an agent, score with 5 scorers, report from LangSmith | **Shipped**, in daily use |
+| [Part 2](#part-2--pm-facing-doc-evaluation-via-claude-and-chatgpt-planned) | Let a PM evaluate a doc draft conversationally from Claude or ChatGPT, no repo access needed | **Design only** — not started |
+
+### Next steps (Part 2, in order)
+
+1. Push repo to GitHub (blocks everything below)
+2. `agent_doc_bench/doc_source.py` — seam for reading named doc variants (git-backed today, swappable later)
+3. `agent_doc_bench/docs_validator.py` + `validate-docs` CLI command
+4. First pytest suite (`tests/test_docs_validator.py`)
+5. `agent_doc_bench/doc_requirements.py` — plain-language checklist generator
+6. `mcp_server/` scaffold — read-only tools (`list_apis`, `get_doc_requirements`, `list_doc_variants`, `get_doc_variant`, `validate_doc_variant`)
+7. `.github/workflows/evaluate-doc-draft.yml` — runs an ablation on demand, commits nothing
+8. `mcp_server/actions_client.py` + the evaluate/status/report tools
+9. Decide hosting for the MCP server + wire OAuth
+10. Register the hosted connector in Claude Desktop and ChatGPT; smoke test end to end
+
+Full detail on each step is in [Part 2](#part-2--pm-facing-doc-evaluation-via-claude-and-chatgpt-planned).
+
+---
+
+## How it works
+
+### Part 1 — today's pipeline
+
+```mermaid
+flowchart LR
+    EC["experiments/*.yaml"] --> R["runner.py"]
+    TS["task_suites/*.yaml"] --> R
+    DL["docs_library/*.md"] --> R
+    R --> A["ClaudeAgent.run_task()"]
+    A --> CT["CodingTrace\ngenerated_code, tokens, latency"]
+    CT --> SC["5 scorers\nsyntax · pattern · llm_judge ·\nstatic_analysis · execution"]
+    R --> M["metrics.py\nturns · tokens · latency"]
+    SC --> LS[("LangSmith")]
+    M --> LS
+    LS --> RF["results_fetcher +\nreport_formatters"]
+    RF --> CLI["agent-doc-bench report"]
+```
+
+### Part 2 — planned PM evaluation flow
+
+```mermaid
+sequenceDiagram
+    participant PM as PM (Claude or ChatGPT)
+    participant MCP as Hosted MCP server
+    participant GH as GitHub Actions
+    participant LS as LangSmith
+
+    PM->>MCP: get_doc_requirements(api)
+    MCP-->>PM: plain-language checklist
+    PM->>MCP: validate_doc_variant(api, content)
+    MCP-->>PM: issues (local, free, no network write)
+    PM->>MCP: evaluate_doc_draft(api, value, content, experiment)
+    MCP->>GH: repository_dispatch (content in payload)
+    GH->>GH: write content to local working copy only<br/>run ablation, mock mode
+    GH->>LS: scores + metrics
+    GH-->>MCP: report.json artifact
+    PM->>MCP: get_evaluation_report(run_id)
+    MCP-->>PM: rendered summary + per-task table
+```
+
+The draft never touches the repo — no commit, no branch, no PR. `docs_library/` stays engineer-only, edited the normal way (Claude Code + a real PR), unrelated to this flow.
+
+---
+
+## Part 1 — Core Benchmark (Shipped)
+
+### Project Structure
 
 ```
 agent-doc-bench/
@@ -74,11 +145,9 @@ agent-doc-bench/
     └── tools_ablation.yaml         # Vary: tools | Fixed: model=sonnet, docs=v1
 ```
 
----
+### Core Concepts
 
-## Core Concepts
-
-### CodingTask
+**CodingTask**
 ```yaml
 # task_suites/blpapi/auth_tasks.yaml
 - id: blpapi_open_session
@@ -100,7 +169,7 @@ agent-doc-bench/
     - syntax_quality: Is the code idiomatic, complete, and correct Python?
 ```
 
-### ExperimentConfig
+**ExperimentConfig**
 ```yaml
 # experiments/doc_ablation.yaml
 name: doc_ablation
@@ -117,7 +186,7 @@ langsmith_project: agent-doc-bench
 
 Only one `variable` key per experiment — enforces single-variable isolation.
 
-### CodingTrace (output of agent)
+**CodingTrace** (output of agent)
 ```python
 @dataclass
 class CodingTrace:
@@ -130,9 +199,7 @@ class CodingTrace:
     latency: dict                # time_to_first_token, time_to_last_token, output_tokens_per_sec
 ```
 
----
-
-## Scorer Pipeline
+### Scorer Pipeline
 
 Every scorer returns an object exposing `.score` and `.comment`; `runner.py` wraps each call in
 `scorers/base.py`'s `run_scorer()` so one scorer raising can't abort the whole evaluation run, and
@@ -149,9 +216,7 @@ reports uniformly as LangSmith feedback `{key, score, comment}`.
 Toggled per-experiment via `scorers: [...]` in the experiment config — a task suite for a different
 API would swap in its own mock/executor rather than reusing `blpapi_mock.py`.
 
-### Execution modes: mock vs. live
-
-`ExecutionScorer` branches on the `BLOOMBERG_MODE` env var (`.env.example`):
+**Execution modes: mock vs. live.** `ExecutionScorer` branches on the `BLOOMBERG_MODE` env var (`.env.example`):
 
 - **`mock` (default).** `sandbox/fixtures/blpapi_mock.py` is written into the sandbox as `blpapi.py`,
   shadowing the real package, and the generated script runs against it directly. Coverage is limited
@@ -171,9 +236,7 @@ API would swap in its own mock/executor rather than reusing `blpapi_mock.py`.
   spelling out the task/variant/fixed config) referenced by *path only* in the comment, for local
   debugging — never their contents.
 
----
-
-## Tracked Metrics
+### Tracked Metrics
 
 Separate from correctness scorers — these measure cost/speed, not correctness, and are always
 reported regardless of which scorers are enabled (`reporting/metrics.py`, invoked unconditionally
@@ -183,9 +246,7 @@ variants in the same way correctness scores are:
 - `metric_n_turns`, `metric_n_toolcalls`, `metric_n_total_tokens` — transcript size
 - `metric_time_to_first_token`, `metric_time_to_last_token`, `metric_output_tokens_per_sec` — latency, captured via the streaming Messages API
 
----
-
-## Agent Layer
+### Agent Layer
 
 `ClaudeAgent.run_task(task: CodingTask, doc_context: str, tools: list) → CodingTrace`
 
@@ -194,9 +255,7 @@ variants in the same way correctness scores are:
 - If `tools` includes `web_search`, wires in a web search tool via MCP or function call
 - `doc_context` is loaded from `docs_library/{api}/{doc_version}.md`; empty string for `none`
 
----
-
-## LangSmith Integration
+### LangSmith Integration
 
 1. Create/update a LangSmith dataset with all task inputs + expected criteria
 2. `target_fn(inputs)`: calls `agent.run_task()` with the experiment's fixed + variable config
@@ -204,9 +263,7 @@ variants in the same way correctness scores are:
 4. `evaluate(target_fn, data=dataset, evaluators=[...], client=client, experiment_prefix=run_id)` — `evaluate` is a top-level `langsmith` function, not a `Client` method
 5. Each run tagged with `variable=value` so LangSmith comparison view works automatically
 
----
-
-## CLI Commands
+### CLI Commands
 
 ```bash
 # Run an ablation (records results in LangSmith)
@@ -223,9 +280,7 @@ agent-doc-bench report experiments/doc_ablation.yaml --format json --output repo
 agent-doc-bench record --task blpapi_open_session
 ```
 
----
-
-## Implementation Steps
+### Implementation history
 
 1. Scaffold `pyproject.toml` + package skeleton + `.env.example`  ✅
 2. `config.py` — `ExperimentConfig` dataclass + YAML loader  ✅
@@ -255,9 +310,7 @@ agent-doc-bench record --task blpapi_open_session
     from LangSmith (summary + per-task detail table, JSON/Markdown export) instead of only listing
     experiment names  ✅
 
----
-
-## Verification
+### Verification
 
 ```bash
 cd agent-doc-bench
@@ -280,26 +333,29 @@ uv run agent-doc-bench report experiments/doc_ablation.yaml
 
 ---
 
-## Next Generation: PM-Facing Doc-Authoring Claude Desktop Extension
+## Part 2 — PM-Facing Doc Evaluation via Claude and ChatGPT (Planned)
 
 **Status: design only, not yet implemented.** Recorded here so the approach is captured before building it.
 
 ### Context
 
-Today only an engineer with Claude Code/shell access can realistically add or edit `docs_library/<api>/*.md` files, because:
+Today only an engineer with Claude Code/shell access can realistically evaluate a documentation draft, because:
 
-1. **Nothing tells a non-engineer what a doc file needs to contain.** The real requirements live in `task_suites/<api>/*.yaml` (`expected_patterns`, `anti_patterns`, `llm_judge_rubric`) — technical YAML, not something a PM can read.
-2. **There's no safe way for a PM to get content into the repo.** A PM would work from a separate machine, with no local checkout, collaborating via Claude Desktop (chat-only), not Claude Code.
+1. **Nothing tells a non-engineer what a doc needs to contain.** The real requirements live in `task_suites/<api>/*.yaml` (`expected_patterns`, `anti_patterns`, `llm_judge_rubric`) — technical YAML, not something a PM can read.
+2. **There's no way for a PM to get a draft scored.** A PM would work from a separate machine, with no local checkout, and — per the confirmed goal — from *either* Claude or ChatGPT, not just one.
 3. **A silent footgun exists today**: `_load_doc()` in `agent_doc_bench/runner.py:33-37` returns `""` (not an error) when a doc filename doesn't exactly match an experiment's `variable.values` entry. A wrong filename would silently run a "no docs" condition with no warning.
 
-The goal: let a PM author documentation variants conversationally in Claude Desktop, get plain-language guidance on what "good" means for each API's benchmark tasks, and safely propose changes — without touching git, YAML, or the engineering machine — while guaranteeing nothing lands on `main` without human review.
+The goal: let a PM paste or attach a documentation draft in Claude or ChatGPT, get plain-language guidance on what "good" means for each API's benchmark tasks, and get it scored — without touching git, YAML, or the engineering machine.
 
-**Design decisions:**
-- A full custom Claude Desktop Extension (locally-installed MCP server, `.mcpb` packaged) — not just docs/guardrails.
-- Repo needs to be pushed to GitHub as a prerequisite (not yet done — this is a separate, explicit action to confirm before Layer 2/3 work starts).
-- The extension talks to the GitHub API (not a local clone), so it works from a PM's separate machine.
-- Writes always go through a PR — nothing ever lands on `main` directly.
-- Includes a first-ever pytest suite for the new logic (none exists in the repo today).
+### Key decisions
+
+- **No repo-write path for PMs.** An earlier version of this design had a `propose_doc_variant` tool that opened a PR to permanently add a new named variant to `docs_library/`. Dropped: the actual ask is "let a PM evaluate a draft," not "let a PM commit to the benchmark corpus." At dozens-of-PMs scale, routing every draft through a PR would flood the repo with review overhead nobody wants, and it isn't necessary — a draft can be scored without ever being written to disk. `docs_library/` remains exactly as it is today: engineer-authored and reviewed the normal way (edit via Claude Code, open a PR), unrelated to this feature. If a draft is ever good enough to become a permanent named variant, that's still that same ordinary engineering step.
+- **Hosted MCP server (HTTP/SSE), not a local `.mcpb`.** `.mcpb` packaging only satisfies Claude Desktop; ChatGPT's connector model (Team/Enterprise/Pro "connectors") expects a remote HTTP/SSE MCP endpoint reachable at a URL. One hosted server, registered as a connector in both clients, covers both without duplicating tool logic.
+- **PMs authenticate to the connector, not to GitHub.** OAuth at the connector layer (Claude/ChatGPT account-level); the server itself holds one shared service credential scoped to `Contents: read` + `Actions: write`. It never has write access to repo contents, so there's no per-PM PAT, no per-PM GitHub identity to provision.
+- **Evaluation runs via GitHub Actions (`repository_dispatch`), never inside the MCP server process.** An ablation run is minutes-long (streaming agent loop × N tasks × LLM judge) — too long for a synchronous MCP tool call. The server only dispatches and polls. The draft's content is never committed — it's passed through the dispatch payload and written only to the ephemeral runner's local working copy.
+- **`docs_library/` is one interchangeable backend, not a permanent fact.** Reads for named variants (`v1`, `v2`, `none`, ...) go through a single seam (`doc_source.py`) instead of hardcoded filesystem/GitHub-Contents calls at each site — if canonical docs move to a different host later (a CMS, a docs database), only that one file changes. PM drafts are unaffected either way since `evaluate_doc_draft`'s content is already passed through inline, never touching `docs_library/`.
+- Repo needs to be pushed to GitHub first (not yet done).
+- Includes the repo's first-ever pytest suite.
 
 ### Layer 1 — Repo-side validator + CLI guardrail
 
@@ -325,72 +381,74 @@ For every `experiments/*.yaml` whose `variable.name == "documentation"`, for eac
 - **empty_non_none** — file is empty/whitespace and `value != "none"` (empty `none.md` is required and correct — never flag it).
 - **stub** — file is non-empty but trivially short / contains a `> **Stub.**` marker (heuristic; treat as a warning, not a hard failure — today's `docs_library/blpapi/v2.md` should trip this).
 
-Never raises on one bad file — collects all issues, mirroring the failure-isolation pattern in `agent_doc_bench/scorers/base.py`'s `run_scorer()`.
+Never raises on one bad file — collects all issues, mirroring the failure-isolation pattern in `agent_doc_bench/scorers/base.py`'s `run_scorer()`. This same function is reused, unmodified, by `validate_doc_variant` below to check a PM's draft in a temp dir before it's ever evaluated.
 
 CLI wiring in `agent_doc_bench/cli.py`: new `@app.command(name="validate-docs")`, following the existing thin-command style (`run`/`report`: parse args, defer heavy imports into the function body, print via the shared `rich.Console`). Non-strict: warns on `stub`, exits 1 only on `missing`/`empty_non_none`. `--strict` flag also fails on `stub`.
 
-### Layer 2 — MCP server (GitHub-backed, PR-only writes)
+New file `agent_doc_bench/doc_source.py` — the one seam that knows where named doc variants actually live:
 
-New top-level directory `mcp_server/` (sibling to `agent_doc_bench/`, not nested in it — different dependency footprint (`mcp`, `PyGithub`) and deployment target (bundled into a Desktop Extension) than the core benchmark library). Depends on `agent_doc_bench` as a library (imports `docs_validator.validate_docs`, `doc_requirements.build_doc_requirements`, `tasks.task_registry.load_suite`) — never the reverse.
+```python
+def list_variants(api: str, base_dir=Path("docs_library")) -> list[str]: ...
+def get_variant(api: str, value: str, base_dir=Path("docs_library")) -> str: ...
+```
 
-Add an optional Poetry dependency group so a plain `poetry install` for benchmark work doesn't pull these in:
+Git/filesystem-backed today (a thin wrapper over reading `docs_library/<api>/*.md` — no behavior change from what `_load_doc()` already does), but every other reader — `validate_docs()`'s `docs_base` traversal, `runner.py`'s `_load_doc()`, and the MCP server's `list_doc_variants`/`get_doc_variant` tools — should call through this module rather than opening `docs_library/` paths directly.
+
+### Layer 2 — MCP server (read-only GitHub access + Actions-triggered evaluation)
+
+New top-level directory `mcp_server/` (sibling to `agent_doc_bench/`, not nested in it — different dependency footprint (`mcp`, `PyGithub`) and deployment target (a hosted service) than the core benchmark library). Depends on `agent_doc_bench` as a library (imports `docs_validator.validate_docs`, `doc_requirements.build_doc_requirements`, `tasks.task_registry.load_suite`, `reporting.report_formatters`) — never the reverse.
+
+Add an optional dependency group so a plain `uv sync` for benchmark work doesn't pull these in:
 ```toml
-[tool.poetry.group.mcp_server]
-optional = true
-[tool.poetry.group.mcp_server.dependencies]
-mcp = "^1.0"
-PyGithub = "^2.4"
+[dependency-groups]
+mcp_server = ["mcp>=1.0", "PyGithub>=2.4"]
 ```
 
 New file `agent_doc_bench/doc_requirements.py` — `build_doc_requirements(api, base_dir=Path("task_suites")) -> str`. Generates a plain-language Markdown checklist **on the fly** from `task_registry.load_suite(api)` — no new YAML schema field. Rationale: `expected_patterns[].label` / `anti_patterns[].label` are already human-readable (e.g. `"instantiates blpapi.Session"`), and `llm_judge_rubric` is already prose — passing them through avoids a second source of truth that would drift from the real pattern/rubric definitions, and avoids touching `task_suites/*.yaml`'s existing 4-field convention (`AGENTS.md`: "Tasks are data, not code").
 
-Tools exposed by `mcp_server/server.py` (using the official `mcp` Python SDK's `FastMCP`, stdio transport):
+Tools exposed by `mcp_server/server.py` (using the official `mcp` Python SDK's `FastMCP`, HTTP/SSE transport):
 
 | Tool | Purpose |
 |---|---|
-| `list_apis()` | List `docs_library/` subfolders via GitHub Contents API |
+| `list_apis()` | List `docs_library/` subfolders via GitHub Contents API (read-only) |
 | `list_experiments()` | List `experiments/*.yaml`, their swept variable + values |
 | `get_doc_requirements(api)` | Plain-language checklist — fetches `task_suites/<api>/*.yaml` into a temp dir, calls `doc_requirements.build_doc_requirements` against it |
-| `list_doc_variants(api)` | Existing `docs_library/<api>/*.md` filenames |
-| `get_doc_variant(api, version)` | Raw content of an existing variant |
-| `validate_doc_variant(api, version, content)` | Dry-run the validator against proposed content, no GitHub write — lets the PM self-correct before committing to a PR |
-| `propose_doc_variant(api, version, content, summary)` | The one write path — see flow below |
+| `list_doc_variants(api)` | Existing named variants, for context ("here's what v1/v2 already look like") — calls `doc_source.list_variants`, not a hardcoded path |
+| `get_doc_variant(api, value)` | Raw content of an existing variant — `doc_source.get_variant`, same seam |
+| `validate_doc_variant(api, content)` | Runs `docs_validator.validate_docs` against the PM's draft in a temp dir — pure local check, no network write, lets the PM self-correct before spending an evaluation run |
+| `evaluate_doc_draft(api, value, content, experiment)` | Dispatches an ablation run with this draft substituted in for `value`; returns a run id — see flow below |
+| `get_evaluation_status(run_id)` | Polls GitHub Actions run status (`queued`/`in_progress`/`completed`) |
+| `get_evaluation_report(run_id)` | Once completed, downloads the JSON report artifact and renders it via `reporting/report_formatters.py` — the same formatter the CLI's `--format markdown` path uses, so the PM sees the identical summary + per-task table an engineer would see locally |
 
-`propose_doc_variant` flow (`mcp_server/github_client.py` wraps PyGithub for `fetch_file`/`list_dir`/branch/PR helpers):
-1. Fetch current `docs_library/<api>/` + `experiments/*.yaml` via GitHub API; warn (don't block) if `version` isn't referenced by any experiment's `variable.values` — such a variant would never actually get used by `_load_doc()`.
-2. Materialize a `tempfile.TemporaryDirectory()` shaped like `docs_base/<api>/`, overlay the proposed content.
-3. Call `docs_validator.validate_docs(docs_base=<tmp>, strict=True)` — same function the CLI uses, no duplicated logic. Hard failures reject the call before anything touches GitHub.
-4. Create branch `docs/<api>-<version>-<short suffix>` off the default branch HEAD.
-5. Create/update `docs_library/<api>/<version>.md` on that branch.
-6. Open a PR into the default branch (never merges) with a body including the PM's `summary` and which `get_doc_requirements` items were targeted. Returns the PR URL.
+`content` is a plain string on every tool that takes one — a PM pastes Markdown directly, or attaches a file and the client (Claude/ChatGPT) extracts its text before calling the tool; MCP itself has no separate "file" argument type. No draft IDs, no server-side storage — nothing persists between calls, so there's nothing to clean up.
 
-`MCP_DRY_RUN=1` env var: skips steps 4-6, returns a synthetic "would open PR titled X" response — the mechanism for testing the full tool logic without a real GitHub write.
+`evaluate_doc_draft` flow (`mcp_server/github_client.py` wraps PyGithub for read-only Contents access; `mcp_server/actions_client.py` wraps the Actions API for dispatch/poll/artifact):
+1. Fetch `experiments/<experiment>.yaml` (read-only) to confirm it exists and uses `variable.name == "documentation"`.
+2. Fire a `repository_dispatch` event (`event_type: evaluate-doc-draft`) with `client_payload: {api, value, content, experiment}` (Markdown docs are a few KB — well within GitHub's ~64KB `client_payload` limit).
+3. `.github/workflows/evaluate-doc-draft.yml` (triggered by that event) checks out `main`, writes `content` into `docs_library/<api>/<value>.md` **in the runner's local working copy only**, patches `experiments/<experiment>.yaml`'s `variable.values` in that same local copy if `value` isn't already listed, then runs `docs_validator.validate_docs(strict=True)` as a hard gate before spending any Anthropic/LangSmith budget.
+4. Runs `agent-doc-bench run experiments/<experiment>.yaml` (mock mode only — no Bloomberg Terminal reachable from a hosted runner), then `agent-doc-bench report --format json`, uploads the JSON as a workflow artifact.
+5. Nothing is committed or pushed at any point — the repo's `git status` at the end of the job is identical to its start.
 
-PAT scope (documented in `mcp_server/README.md`): fine-grained PAT scoped to this one repo only — Contents: Read/write, Pull requests: Read/write. Nothing else.
+Because `repository_dispatch` doesn't return a run id directly, the server polls `GET /repos/{owner}/{repo}/actions/workflows/evaluate-doc-draft.yml/runs` for the newest run right after dispatching and returns its `run_id`.
 
-### Layer 3 — Desktop Extension packaging
+`MCP_DRY_RUN=1` env var: skips the dispatch, returns a synthetic "would run experiment X with draft Y" response — the mechanism for testing tool logic without burning a real evaluation run.
 
-`mcp_server/manifest.json` (Desktop Extension / `.mcpb` spec): declares the 7 tools, and `user_config` for `repo_owner`, `repo_name`, and `github_pat` (marked `sensitive: true`, templated into `GITHUB_TOKEN`/`GITHUB_OWNER`/`GITHUB_REPO` env vars at process spawn). Verify exact manifest field names against the current published spec at build time.
+Service credential scope (documented in `mcp_server/README.md`): one fine-grained PAT (or GitHub App installation token) scoped to this one repo — `Contents: Read`, `Actions: Read and write`. No `Contents: Write`, no `Pull requests` scope at all — the server is structurally incapable of writing to the repo.
 
-Packaging: `@anthropic-ai/mcpb` CLI (`npx @anthropic-ai/mcpb pack mcp_server/ agent-doc-bench-docs.mcpb`), bundling a vendored `lib/` of Python deps (including `agent_doc_bench` itself) so the PM doesn't need Python/poetry installed locally — the PM persona is explicitly non-technical.
+### Layer 3 — Hosting + dual-client registration (Claude Desktop + ChatGPT)
 
-PM install steps (documented in `mcp_server/README.md`):
-1. Receive the built `.mcpb` from an engineer.
-2. Claude Desktop → Settings → Extensions → install from file.
-3. Fill in `user_config`: repo owner/name, and a fine-grained PAT the PM creates themselves (one-time manual GitHub UI step — worth a short annotated doc since this is the one place the PM touches raw GitHub).
-4. Chat naturally: "what does the blpapi docs need to cover?" → `get_doc_requirements`; "here's a draft, open a PR" → `propose_doc_variant`.
+- Serve over HTTP/SSE (`FastMCP` supports this transport directly) from one deployed instance reachable at a stable URL. Host TBD (needs a decision — anything that can run a small always-on Python process behind HTTPS).
+- Front it with OAuth so PMs authenticate with their own Claude/ChatGPT-linked identity; the server's own GitHub credential (above) is a single shared service identity, never something a PM sees or provides.
+- **Claude Desktop**: add as a remote MCP connector pointing at the hosted URL (Settings → Connectors).
+- **ChatGPT**: add as a custom connector (Team/Enterprise/Pro tier) pointing at the same hosted URL.
+- Same tool logic, same evaluation flow, in both — no second implementation, no drift risk between what each client can do.
 
-### Alternative: multi-client support (Claude Desktop + ChatGPT)
+PM usage (documented in `mcp_server/README.md`):
+1. An engineer confirms the hosted URL is live and the OAuth app is registered.
+2. PM adds the connector once per client (Claude Desktop or ChatGPT → Settings → Connectors) using the hosted URL, and completes the OAuth prompt — no PAT, no manifest file, no local Python.
+3. Chat naturally in either client: "what does the blpapi docs need to cover?" → `get_doc_requirements`; paste or attach a draft and ask "score this" → `validate_doc_variant` then `evaluate_doc_draft` + `get_evaluation_report`.
 
-The 7-tool design and the GitHub-PR write flow are protocol-level (plain MCP) and portable — they aren't Claude-specific. The `.mcpb` **packaging** in Layer 3 is, though: it's a local stdio process Claude Desktop spawns and installs from a file, which ChatGPT has no equivalent for. OpenAI's MCP support in ChatGPT ("connectors," currently Team/Enterprise/Pro tiers) expects a **remote HTTP/SSE MCP server** reachable at a URL, typically with OAuth-style auth rather than the `sensitive: true` env-var PAT field the Desktop Extension manifest uses.
-
-If PM usage ever needs to span both clients, the design should shift from "local process bundled as `.mcpb`" to "one hosted HTTP service, registered two ways":
-- Same `mcp_server/server.py` tool logic, served over HTTP/SSE instead of stdio, deployed somewhere reachable (not spawned locally).
-- Claude Desktop: still installable as a thin `.mcpb` extension, or added directly as a remote connector pointing at the hosted URL.
-- ChatGPT: added as a custom connector pointing at the same hosted URL.
-- Auth moves from a raw PAT typed into `user_config` to an OAuth flow in front of the GitHub PAT (or a scoped backend service account), since ChatGPT's connector model expects OAuth, not a pasted secret.
-
-This is a materially bigger lift than the local-only design above (hosting, uptime, OAuth) — worth doing only once it's confirmed a PM will actually be on ChatGPT rather than speculatively.
+**Note on file attachments**: for Markdown/plain-text drafts this is a lossless pass-through — the client sends exactly what was pasted or attached. For non-text formats (PDF, Word), both clients will extract text, but that extraction is a summarize/reformat step, not a guaranteed verbatim transcription — risky for a format whose exact strings get regex-matched (`expected_patterns`/`anti_patterns`). PMs should author/paste in Markdown directly rather than upload PDFs/Word docs; see Open risks.
 
 ### New/modified files (planned)
 
@@ -398,53 +456,63 @@ This is a materially bigger lift than the local-only design above (hosting, upti
 agent_doc_bench/
 ├── docs_validator.py          NEW
 ├── doc_requirements.py        NEW
+├── doc_source.py              NEW — seam for reading named variants; docs_validator, runner.py, and mcp_server read through it
 └── cli.py                     MODIFIED — add `validate-docs` command
 
-docs_library/
-├── README.md                  NEW — format conventions, points at get_doc_requirements/validate-docs
-└── TEMPLATE.md                NEW — skeleton mirroring v1.md's section shape
+.github/workflows/
+└── evaluate-doc-draft.yml     NEW — repository_dispatch entrypoint for evaluate_doc_draft; never commits
 
 mcp_server/                    NEW top-level dir
-├── server.py                  FastMCP tool definitions
-├── github_client.py           PyGithub wrapper
-├── manifest.json              Desktop Extension manifest
-├── README.md                  PAT setup + install steps + dry-run testing
+├── server.py                  FastMCP tool definitions (HTTP/SSE transport)
+├── github_client.py           PyGithub wrapper, read-only (Contents)
+├── actions_client.py          GitHub Actions API wrapper (dispatch, run status, artifact download)
+├── README.md                  Hosting/OAuth setup + service credential scope + dry-run testing
 └── tests/
-    └── test_server_dry_run.py
+    ├── test_server_dry_run.py
+    └── test_actions_client.py
 
 tests/
 └── test_docs_validator.py     NEW — first test file in the repo
 
-pyproject.toml                 MODIFIED — optional `mcp_server` group (mcp, PyGithub); pytest as dev dep
-AGENTS.md                      MODIFIED — add "Doc authoring via Claude Desktop extension" pointer + validate-docs in Common commands
+pyproject.toml                 MODIFIED — optional `mcp_server` dependency group (mcp, PyGithub); pytest as dev dep
+AGENTS.md                      MODIFIED — add "Doc evaluation via MCP connector" pointer + validate-docs in Common commands
 README.md                      MODIFIED — mention validate-docs, link mcp_server/README.md
 ```
 
-### Implementation steps
+### Implementation steps (detail)
 
 1. Push repo to GitHub (prerequisite for Layers 2/3 — confirm timing separately)
-2. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`
-3. `cli.py` — `validate-docs` command
-4. `tests/test_docs_validator.py` — pytest added as dev dependency; covers `v2.md` stub flag, `none.md` exemption, filename-mismatch footgun
-5. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels
-6. `mcp_server/` scaffold — `server.py`, `github_client.py`, optional Poetry dependency group
-7. `propose_doc_variant` write flow (branch → validate → commit → PR), `MCP_DRY_RUN` support
-8. `mcp_server/tests/test_server_dry_run.py` — all 7 tools exercised without real GitHub calls
-9. `mcp_server/manifest.json` + packaging via `@anthropic-ai/mcpb`
-10. `docs_library/README.md` + `TEMPLATE.md`; `AGENTS.md`/`README.md` pointers
-11. One manual smoke test of the real write path against a throwaway/test repo once GitHub hosting exists
+2. `agent_doc_bench/doc_source.py` — `list_variants()`/`get_variant()`, git-backed; `runner.py`'s `_load_doc()` and `docs_validator.py` route through it instead of touching `docs_library/` paths directly
+3. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`
+4. `cli.py` — `validate-docs` command
+5. `tests/test_docs_validator.py` — pytest added as dev dependency; covers `v2.md` stub flag, `none.md` exemption, filename-mismatch footgun
+6. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels
+7. `mcp_server/` scaffold — `server.py` (HTTP/SSE), `github_client.py` (read-only, calls through `doc_source.py`), optional uv dependency group
+8. `.github/workflows/evaluate-doc-draft.yml` — `repository_dispatch` handler: local-only file write, validate gate, mock-mode run, JSON report artifact, no commit/push
+9. `mcp_server/actions_client.py` + `evaluate_doc_draft`/`get_evaluation_status`/`get_evaluation_report` tools
+10. `mcp_server/tests/test_server_dry_run.py` + `test_actions_client.py` — all 9 tools exercised without real GitHub/Actions calls
+11. Decide + stand up hosting for the HTTP/SSE server; wire OAuth in front of it; provision the read-only + Actions-write service credential
+12. Register the hosted URL as a connector in Claude Desktop and in ChatGPT; confirm both round-trip `get_doc_requirements` → `validate_doc_variant` → `evaluate_doc_draft` → `get_evaluation_report`
+13. One manual smoke test of the real evaluate path against a throwaway/test repo
 
 ### Verification (once implemented)
 
 1. `tests/test_docs_validator.py`: `validate_docs()` against the real `experiments/`/`docs_library/` flags `docs_library/blpapi/v2.md` as `kind="stub"`; `none.md` is not flagged despite being empty; a deliberately mismatched filename is flagged `kind="missing"`.
 2. `doc_requirements.build_doc_requirements("blpapi")` test asserts output contains known pattern labels (e.g. `"instantiates blpapi.Session"`).
-3. `mcp_server/tests/test_server_dry_run.py`: drive the server via the `mcp` SDK's client session over stdio (or the official MCP Inspector for manual poking), with `MCP_DRY_RUN=1` and `github_client` mocked/pointed at local disk for read tools.
-4. `poetry run agent-doc-bench validate-docs` against the repo as-is prints the `v2.md` stub warning, exits 0; `--strict` exits 1.
-5. One manual smoke test of the real write path (`MCP_DRY_RUN=0`) against a throwaway/test repo — confirm a real PR appears, nothing touches `main`, and the PAT can't do anything beyond Contents+PRs on that repo.
+3. `mcp_server/tests/test_server_dry_run.py`: drive the server via the `mcp` SDK's client session (HTTP/SSE), with `MCP_DRY_RUN=1` and `github_client`/`actions_client` mocked/pointed at local disk for read tools.
+4. `mcp_server/tests/test_actions_client.py`: `evaluate_doc_draft` dispatches with the right `client_payload` (mocked GitHub API); `get_evaluation_report` correctly renders a fixture `report.json` through `report_formatters.py`.
+5. `uv run agent-doc-bench validate-docs` against the repo as-is prints the `v2.md` stub warning, exits 0; `--strict` exits 1.
+6. One manual smoke test of the real evaluate path (`MCP_DRY_RUN=0`) against a throwaway/test repo — confirm a real Actions run completes, `git status` on `main` is unchanged before/after, `get_evaluation_report` returns a sane table, and the service credential can't write repo contents even if asked to.
+7. Confirm the same `evaluate_doc_draft` → `get_evaluation_report` round trip works identically from both a Claude Desktop connector session and a ChatGPT connector session.
 
 ### Open risks
 
 - **GitHub push is a prerequisite outside this design** — nothing in Layer 2/3 works until the repo has a remote.
-- **PAT storage**: `sensitive: true` in the manifest keeps Claude Desktop from displaying/logging the token, but verify how Desktop actually stores `user_config` secrets before treating this as fully solved.
+- **Hosting + OAuth is a real lift** — an always-on service and a registered OAuth app. Worth confirming ChatGPT access is actually needed before starting this vs. a cheaper Claude-only local `.mcpb` fallback (still viable if it turns out only Claude Desktop is needed — reintroduces stdio transport and a per-PM env var for the read-only service credential instead of OAuth, nothing else changes).
+- **Evaluation cost/latency per call**: each `evaluate_doc_draft` call burns real Anthropic + LangSmith usage and takes minutes; `validate_doc_variant` is free/local and should be presented to PMs as the first, cheap step before spending an evaluation run.
+- **File-attachment fidelity**: pasted/attached Markdown passes through verbatim, but PDF/Word attachments go through a client-side text-extraction step that isn't guaranteed to preserve exact strings — a real risk for a format whose `expected_patterns`/`anti_patterns` are regex-matched. Mitigate by instructing PMs (in `mcp_server/README.md` and in tool descriptions) to paste or attach Markdown/plain text, not PDF/Word.
+- **`repository_dispatch` payload size**: fine for a documentation file's usual few KB; if a draft ever approaches GitHub's ~64KB `client_payload` limit, `evaluate_doc_draft` should fail with a clear size error rather than silently truncating.
 - **Stub-detection is a heuristic** (character count + marker match) — expect some false positives/negatives; keep it a warning, not a hard failure, outside `--strict`.
 - **`llm_judge_rubric` passthrough** assumes existing rubric prose is PM-readable — confirmed for `auth_tasks.yaml`; worth a quick read-through of `data_tasks.yaml`/`pattern_tasks.yaml` rubrics before shipping to confirm they're equally plain-language.
+- **CI evaluation is mock-mode only** — a PM's `evaluate_doc_draft` run never reflects live-Bloomberg-Terminal behavior; `get_evaluation_report` output should say so explicitly so a PM doesn't over-read a mock-mode score.
+- **`docs_library/` may not be the long-term home for named variants** — if canonical docs move to a different host later, `doc_source.py` is the only file that should need to change; if a future implementation ends up bypassing it (a direct `Path("docs_library")` or GitHub Contents call added elsewhere for convenience), that migration gets harder again. Worth a quick grep for stray direct accesses before that migration, not just trusting the seam held.
