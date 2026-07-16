@@ -76,9 +76,17 @@ uv run agent-doc-bench report experiments/doc_ablation.yaml
 # Machine-readable export, e.g. for a PM to paste into an LLM chat for interpretation
 uv run agent-doc-bench report experiments/doc_ablation.yaml --format markdown
 uv run agent-doc-bench report experiments/doc_ablation.yaml --format json --output report.json
+
+# Check that every experiment's documentation variants exist and aren't stub placeholders
+uv run agent-doc-bench validate-docs
+uv run agent-doc-bench validate-docs --strict   # also fail on stub-quality docs
 ```
 
-There is currently no automated test suite — verify changes by running the smoke-test experiment above and confirming a LangSmith run appears with expected scorer output (see "Verification" in IMPLEMENTATION_PLAN.md).
+```bash
+uv run pytest tests/  # docs_validator and other non-LangSmith-dependent logic
+```
+
+For anything that touches the agent/LangSmith path, verify by running the smoke-test experiment above and confirming a LangSmith run appears with expected scorer output (see "Verification" in IMPLEMENTATION_PLAN.md).
 
 ## Conventions to follow
 

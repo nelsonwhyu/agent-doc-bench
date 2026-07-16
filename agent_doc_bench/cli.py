@@ -77,6 +77,30 @@ def report(
         raise typer.Exit(1)
 
 
+@app.command(name="validate-docs")
+def validate_docs_cmd(
+    experiments_dir: Path = typer.Option(Path("experiments"), help="Directory of experiment YAML configs"),
+    docs_base: Path = typer.Option(Path("docs_library"), help="Root directory for docs variants"),
+    strict: bool = typer.Option(False, "--strict", help="Also fail on stub-quality docs, not just missing/empty"),
+) -> None:
+    """Check that every experiment's documentation variants exist and aren't empty/stub placeholders."""
+    from agent_doc_bench.docs_validator import validate_docs
+
+    issues = validate_docs(experiments_dir=experiments_dir, docs_base=docs_base)
+
+    hard_kinds = {"missing", "empty_non_none"} | ({"stub"} if strict else set())
+
+    for issue in issues:
+        color = "red" if issue.kind in hard_kinds else "yellow"
+        console.print(f"[{color}]{issue.kind}[/{color}] {issue.experiment} ({issue.api}/{issue.value}): {issue.detail}")
+
+    if not issues:
+        console.print("[green]No issues found.[/green]")
+
+    if any(issue.kind in hard_kinds for issue in issues):
+        raise typer.Exit(1)
+
+
 def _report_legacy(experiment: str) -> None:
     """Fallback when `experiment` isn't a YAML config path: list matching
     LangSmith experiment names only, same as this command's old behavior —

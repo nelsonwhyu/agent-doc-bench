@@ -6,6 +6,7 @@ from typing import Any
 from agent_doc_bench.agent.base_agent import CodingTrace
 from agent_doc_bench.agent.claude_agent import ClaudeAgent
 from agent_doc_bench.config import ExperimentConfig
+from agent_doc_bench.doc_source import get_variant
 from agent_doc_bench.reporting import metrics
 from agent_doc_bench.reporting.langsmith_reporter import LangSmithReporter
 from agent_doc_bench.scorers import execution_scorer, llm_judge, pattern_scorer, static_analysis_scorer, syntax_scorer
@@ -37,10 +38,7 @@ SCORER_REGISTRY: dict[str, tuple[str, Any]] = {
 
 
 def _load_doc(api: str, version: str, docs_base: Path) -> str:
-    path = docs_base / api / f"{version}.md"
-    if not path.exists():
-        return ""
-    return path.read_text()
+    return get_variant(api, version, docs_base)
 
 
 def _score_and_comment(

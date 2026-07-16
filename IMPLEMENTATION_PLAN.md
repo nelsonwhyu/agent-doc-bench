@@ -24,11 +24,11 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 
 ### Next steps (Part 2, in order)
 
-1. Push repo to GitHub (blocks everything below)
-2. `agent_doc_bench/doc_source.py` — seam for reading named doc variants (git-backed today, swappable later)
-3. `agent_doc_bench/docs_validator.py` + `validate-docs` CLI command
-4. First pytest suite (`tests/test_docs_validator.py`)
-5. `agent_doc_bench/doc_requirements.py` — plain-language checklist generator
+1. ~~Push repo to GitHub~~ ✅
+2. ~~`agent_doc_bench/doc_source.py` — seam for reading named doc variants~~ ✅
+3. ~~`agent_doc_bench/docs_validator.py` + `validate-docs` CLI command~~ ✅
+4. ~~First pytest suite (`tests/test_docs_validator.py`)~~ ✅ — 5 tests, all passing; `uv run pytest tests/`
+5. `agent_doc_bench/doc_requirements.py` — plain-language checklist generator **(up next)**
 6. `mcp_server/` scaffold — read-only tools (`list_apis`, `get_doc_requirements`, `list_doc_variants`, `get_doc_variant`, `validate_doc_variant`)
 7. `.github/workflows/evaluate-doc-draft.yml` — runs an ablation on demand, commits nothing
 8. `mcp_server/actions_client.py` + the evaluate/status/report tools
@@ -379,7 +379,7 @@ def validate_docs(experiments_dir=Path("experiments"), docs_base=Path("docs_libr
 For every `experiments/*.yaml` whose `variable.name == "documentation"`, for each `value` in `variable.values`, check `docs_base/<task_suite>/<value>.md`:
 - **missing** — file doesn't exist (the exact `_load_doc()` footgun, turned into a hard failure).
 - **empty_non_none** — file is empty/whitespace and `value != "none"` (empty `none.md` is required and correct — never flag it).
-- **stub** — file is non-empty but trivially short / contains a `> **Stub.**` marker (heuristic; treat as a warning, not a hard failure — today's `docs_library/blpapi/v2.md` should trip this).
+- **stub** — file is non-empty but trivially short / contains a `> **Stub.**` marker (heuristic; treat as a warning, not a hard failure — today's `docs_library/blpapi/v1.md` trips this, since it says outright "replace this file with your actual documentation"; `v2.md` isn't referenced by any experiment's `variable.values` yet, so it isn't checked at all).
 
 Never raises on one bad file — collects all issues, mirroring the failure-isolation pattern in `agent_doc_bench/scorers/base.py`'s `run_scorer()`. This same function is reused, unmodified, by `validate_doc_variant` below to check a PM's draft in a temp dir before it's ever evaluated.
 
@@ -481,11 +481,11 @@ README.md                      MODIFIED — mention validate-docs, link mcp_serv
 
 ### Implementation steps (detail)
 
-1. Push repo to GitHub (prerequisite for Layers 2/3 — confirm timing separately)
-2. `agent_doc_bench/doc_source.py` — `list_variants()`/`get_variant()`, git-backed; `runner.py`'s `_load_doc()` and `docs_validator.py` route through it instead of touching `docs_library/` paths directly
-3. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`
-4. `cli.py` — `validate-docs` command
-5. `tests/test_docs_validator.py` — pytest added as dev dependency; covers `v2.md` stub flag, `none.md` exemption, filename-mismatch footgun
+1. Push repo to GitHub (prerequisite for Layers 2/3 — confirm timing separately)  ✅
+2. `agent_doc_bench/doc_source.py` — `list_variants()`/`get_variant()`, git-backed; `runner.py`'s `_load_doc()` and `docs_validator.py` route through it instead of touching `docs_library/` paths directly  ✅
+3. `agent_doc_bench/docs_validator.py` — `validate_docs()` + `DocIssue`  ✅
+4. `cli.py` — `validate-docs` command  ✅
+5. `tests/test_docs_validator.py` — pytest added as dev dependency; covers stub flag (`v1.md`'s own `**Stub.**` marker), `none.md` exemption, filename-mismatch footgun  ✅ (`v2.md` isn't currently referenced by any experiment's `variable.values`, so it's out of scope for the validator today — see note below)
 6. `agent_doc_bench/doc_requirements.py` — `build_doc_requirements()`, tested against real `task_suites/blpapi/*.yaml` labels
 7. `mcp_server/` scaffold — `server.py` (HTTP/SSE), `github_client.py` (read-only, calls through `doc_source.py`), optional uv dependency group
 8. `.github/workflows/evaluate-doc-draft.yml` — `repository_dispatch` handler: local-only file write, validate gate, mock-mode run, JSON report artifact, no commit/push

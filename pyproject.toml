@@ -37,9 +37,10 @@ packages = ["agent_doc_bench"]
 # a machine without access to blpapi.bloomberg.com (e.g. CI) with:
 #   uv sync --no-default-groups
 live = ["blpapi"]
+dev = ["pytest>=8.0,<9.0"]
 
 [tool.uv]
-default-groups = ["live"]
+default-groups = ["live", "dev"]
 
 [tool.uv.sources]
 blpapi = { index = "bloomberg" }
