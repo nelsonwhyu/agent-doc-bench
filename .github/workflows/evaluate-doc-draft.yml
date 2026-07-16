@@ -1,0 +1,47 @@
+name: Evaluate doc draft
+
+on:
+  repository_dispatch:
+    types: [evaluate-doc-draft]
+
+# The PM's draft (github.event.client_payload.content) is untrusted text.
+# Per GitHub's script-injection guidance, it only ever crosses through the
+# `env:` mapping below — a single, safe substitution into a real
+# environment variable — and gets read back out via os.environ in
+# apply_draft.py. It is never interpolated directly into a `run:` shell
+# string, and this job never commits or pushes anything.
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    env:
+      DRAFT_API: ${{ github.event.client_payload.api }}
+      DRAFT_VALUE: ${{ github.event.client_payload.value }}
+      DRAFT_CONTENT: ${{ github.event.client_payload.content }}
+      DRAFT_EXPERIMENT: ${{ github.event.client_payload.experiment }}
+      BLOOMBERG_MODE: mock
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies (mock mode only — skip the live/blpapi and dev groups)
+        run: uv sync --no-default-groups
+
+      - name: Apply the draft to a local-only working copy (never committed)
+        run: uv run python .github/workflows/scripts/apply_draft.py
+
+      - name: Validate the draft (hard gate before spending Anthropic/LangSmith budget)
+        run: uv run agent-doc-bench validate-docs --strict
+
+      - name: Run the ablation
+        run: uv run agent-doc-bench run "experiments/${DRAFT_EXPERIMENT}.yaml"
+
+      - name: Render the report as JSON
+        run: uv run agent-doc-bench report "experiments/${DRAFT_EXPERIMENT}.yaml" --format json --output report.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report.json
