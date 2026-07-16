@@ -64,7 +64,7 @@ def test_does_not_duplicate_existing_value(tmp_path: Path) -> None:
         {
             "DRAFT_API": "blpapi",
             "DRAFT_VALUE": "v1",
-            "DRAFT_CONTENT": "content",
+            "DRAFT_CONTENT": "# real content\n\n" + "x" * 200,
             "DRAFT_EXPERIMENT": "doc_ablation",
         },
     )
@@ -82,7 +82,7 @@ def test_rejects_unsafe_identifier(tmp_path: Path) -> None:
         {
             "DRAFT_API": "../../etc",
             "DRAFT_VALUE": "v1",
-            "DRAFT_CONTENT": "content",
+            "DRAFT_CONTENT": "# real content\n\n" + "x" * 200,
             "DRAFT_EXPERIMENT": "doc_ablation",
         },
     )
@@ -111,13 +111,51 @@ def test_rejects_experiment_without_documentation_variable(tmp_path: Path) -> No
         {
             "DRAFT_API": "blpapi",
             "DRAFT_VALUE": "v1",
-            "DRAFT_CONTENT": "content",
+            "DRAFT_CONTENT": "# real content\n\n" + "x" * 200,
             "DRAFT_EXPERIMENT": "llm_ablation",
         },
     )
 
     assert result.returncode != 0
     assert "documentation" in result.stderr
+
+
+def test_rejects_empty_draft_without_touching_disk(tmp_path: Path) -> None:
+    _seed_experiment(tmp_path, "doc_ablation", ["none", "v1"])
+
+    result = _run(
+        tmp_path,
+        {
+            "DRAFT_API": "blpapi",
+            "DRAFT_VALUE": "pm-draft-empty",
+            "DRAFT_CONTENT": "",
+            "DRAFT_EXPERIMENT": "doc_ablation",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "Draft rejected" in result.stderr
+    assert not (tmp_path / "docs_library" / "blpapi" / "pm-draft-empty.md").exists()
+
+
+def test_rejects_stub_draft_regardless_of_other_variants(tmp_path: Path) -> None:
+    # v1.md itself contains a "> **Stub.**" marker in the real repo — this
+    # draft-only gate must not care about that; it only judges the content
+    # actually passed in for this call.
+    _seed_experiment(tmp_path, "doc_ablation", ["none", "v1"])
+
+    result = _run(
+        tmp_path,
+        {
+            "DRAFT_API": "blpapi",
+            "DRAFT_VALUE": "pm-draft-stub",
+            "DRAFT_CONTENT": "> **Stub.** placeholder",
+            "DRAFT_EXPERIMENT": "doc_ablation",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "Draft rejected" in result.stderr
 
 
 def test_rejects_missing_experiment(tmp_path: Path) -> None:
@@ -128,7 +166,7 @@ def test_rejects_missing_experiment(tmp_path: Path) -> None:
         {
             "DRAFT_API": "blpapi",
             "DRAFT_VALUE": "v1",
-            "DRAFT_CONTENT": "content",
+            "DRAFT_CONTENT": "# real content\n\n" + "x" * 200,
             "DRAFT_EXPERIMENT": "does_not_exist",
         },
     )

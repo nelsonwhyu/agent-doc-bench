@@ -48,10 +48,14 @@ jobs:
         run: uv sync --no-default-groups
 
       - name: Apply the draft to a local-only working copy (never committed)
+        # Also the hard gate before spending Anthropic/LangSmith budget:
+        # apply_draft.py rejects an empty/stub draft itself (via
+        # docs_validator.check_draft_content) before writing anything.
+        # Deliberately not `agent-doc-bench validate-docs --strict` here —
+        # that checks every doc variant the experiment references, so a
+        # pre-existing stub elsewhere (e.g. v1.md) would block every run
+        # forever regardless of this draft's own quality.
         run: uv run python .github/workflows/scripts/apply_draft.py
-
-      - name: Validate the draft (hard gate before spending Anthropic/LangSmith budget)
-        run: uv run agent-doc-bench validate-docs --strict
 
       - name: Run the ablation
         run: uv run agent-doc-bench run "experiments/${DRAFT_EXPERIMENT}.yaml"

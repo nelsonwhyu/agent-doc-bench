@@ -21,6 +21,8 @@ from pathlib import Path
 
 import yaml
 
+from agent_doc_bench.docs_validator import check_draft_content
+
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -39,6 +41,15 @@ def main() -> None:
     value = require_identifier("DRAFT_VALUE")
     experiment = require_identifier("DRAFT_EXPERIMENT")
     content = os.environ["DRAFT_CONTENT"]
+
+    # Gate on the draft itself, not on validate_docs()'s whole-experiment
+    # scan — that would also flag pre-existing variants this call has
+    # nothing to do with (e.g. v1.md's own long-standing stub marker),
+    # which would reject every evaluate_doc_draft call against an
+    # experiment forever, regardless of the PM's own draft quality.
+    issues = check_draft_content(content)
+    if issues:
+        sys.exit("Draft rejected:\n" + "\n".join(f"- {issue}" for issue in issues))
 
     doc_path = Path("docs_library") / api / f"{value}.md"
     doc_path.parent.mkdir(parents=True, exist_ok=True)
