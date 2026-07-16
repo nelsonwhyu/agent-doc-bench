@@ -4,11 +4,12 @@ Lets a PM read documentation requirements, browse existing doc variants, and
 sanity-check a draft — from Claude or ChatGPT, without a local checkout.
 See `IMPLEMENTATION_PLAN.md`'s "Part 2" for the full design and rationale.
 
-**Status: read-only tools only.** `evaluate_doc_draft` / `get_evaluation_status` /
-`get_evaluation_report` (the tools that actually trigger and report back an
-ablation run via GitHub Actions) aren't built yet — see Implementation steps
-7-9 in the plan. Hosting and OAuth (Layer 3) also aren't set up yet; today
-this only runs locally.
+**Status: all 9 tools implemented, nothing hosted yet.** Reads, local
+validation, and now `evaluate_doc_draft`/`get_evaluation_status`/
+`get_evaluation_report` (which dispatch and poll a real ablation run via
+GitHub Actions) all work. What's missing is Layer 3: hosting the server over
+HTTP/SSE at a stable URL, OAuth in front of it, and registering it as a
+connector in Claude Desktop / ChatGPT — today this only runs locally.
 
 ## Setup
 
@@ -41,16 +42,11 @@ requires:
 
 | Env var | Purpose |
 |---|---|
-| `GITHUB_TOKEN` | A fine-grained PAT (or GitHub App installation token) scoped to **this one repo only** — `Contents: Read`. No write scope of any kind: this server has no code path that can commit to the repo. |
+| `GITHUB_TOKEN` | A fine-grained PAT (or GitHub App installation token) scoped to **this one repo only** — `Contents: Read`, `Actions: Read and write` (to dispatch/poll `evaluate_doc_draft` runs). No `Contents: Write` or `Pull requests` scope of any kind: this server has no code path that can commit to the repo. |
 | `GITHUB_OWNER` | Repo owner, e.g. `nelsonwhyu` |
 | `GITHUB_REPO` | Repo name, e.g. `agent-doc-bench` |
 
-Once `evaluate_doc_draft` lands (implementation step 8), the token will also
-need `Actions: Read and write` to dispatch and poll ablation runs — still no
-`Contents: Write` or `Pull requests` scope, since evaluation runs never
-commit anything (see the plan's Layer 2 design).
-
-## Tools implemented so far
+## Tools implemented
 
 | Tool | Notes |
 |---|---|
@@ -60,10 +56,17 @@ commit anything (see the plan's Layer 2 design).
 | `list_doc_variants(api)` | Existing named doc variants |
 | `get_doc_variant(api, value)` | Raw content of an existing variant |
 | `validate_doc_variant(api, content)` | Local empty/stub check on a draft — free, no network write |
+| `evaluate_doc_draft(api, value, content, experiment)` | Dispatches `.github/workflows/evaluate-doc-draft.yml` via `repository_dispatch`; returns a run id. Costs real Anthropic + LangSmith usage — call `validate_doc_variant` first. |
+| `get_evaluation_status(run_id)` | Polls the run: `queued` / `in_progress` / `completed` |
+| `get_evaluation_report(run_id)` | Once completed, returns the Markdown report the workflow rendered and uploaded — same formatter the CLI's `report --format markdown` uses |
+
+In `MCP_DRY_RUN=1` mode, `evaluate_doc_draft` never calls GitHub at all — it
+returns a synthetic `dry-run-<hex>` run id, and `get_evaluation_status`/
+`get_evaluation_report` recognize that prefix and return canned responses.
 
 ## Not yet implemented
 
-- `evaluate_doc_draft`, `get_evaluation_status`, `get_evaluation_report` (need `.github/workflows/evaluate-doc-draft.yml` + `mcp_server/actions_client.py` first)
 - Hosting the server over HTTP/SSE at a stable URL
 - OAuth in front of the connector
 - Registering the connector in Claude Desktop / ChatGPT
+- A real end-to-end smoke test against an actual GitHub Actions run (everything so far is unit-tested against fakes; nothing has dispatched a real workflow yet)

@@ -51,3 +51,27 @@ def test_make_client_requires_github_env_when_not_dry_run(monkeypatch: pytest.Mo
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     with pytest.raises(KeyError):
         server.make_client()
+
+
+def test_evaluate_doc_draft_dry_run_never_touches_github() -> None:
+    result = server.evaluate_doc_draft(api="blpapi", value="pm-draft", content="# doc", experiment="doc_ablation")
+
+    assert result["run_id"].startswith(server.DRY_RUN_PREFIX)
+    assert "doc_ablation" in result["note"]
+
+
+def test_get_evaluation_status_dry_run_reports_completed() -> None:
+    dispatched = server.evaluate_doc_draft(api="blpapi", value="pm-draft", content="# doc", experiment="doc_ablation")
+
+    status = server.get_evaluation_status(dispatched["run_id"])
+
+    assert status["status"] == "completed"
+    assert status["conclusion"] == "success"
+
+
+def test_get_evaluation_report_dry_run_is_a_placeholder() -> None:
+    dispatched = server.evaluate_doc_draft(api="blpapi", value="pm-draft", content="# doc", experiment="doc_ablation")
+
+    report = server.get_evaluation_report(dispatched["run_id"])
+
+    assert "MCP_DRY_RUN" in report

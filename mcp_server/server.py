@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 from agent_doc_bench.doc_requirements import build_doc_requirements
 from agent_doc_bench.docs_validator import check_draft_content
+from mcp_server.actions_client import ActionsClient
 from mcp_server.github_client import DocsRepoClient, GitHubDocsClient, LocalDocsClient
 
 mcp = FastMCP("agent-doc-bench")
+
+DRY_RUN_PREFIX = "dry-run-"
 
 
 def make_client() -> DocsRepoClient:
@@ -22,6 +26,14 @@ def make_client() -> DocsRepoClient:
     if os.environ.get("MCP_DRY_RUN") == "1":
         return LocalDocsClient(os.environ.get("MCP_DRY_RUN_REPO_ROOT", "."))
     return GitHubDocsClient(
+        token=os.environ["GITHUB_TOKEN"],
+        owner=os.environ["GITHUB_OWNER"],
+        repo=os.environ["GITHUB_REPO"],
+    )
+
+
+def make_actions_client() -> ActionsClient:
+    return ActionsClient(
         token=os.environ["GITHUB_TOKEN"],
         owner=os.environ["GITHUB_OWNER"],
         repo=os.environ["GITHUB_REPO"],
@@ -74,6 +86,51 @@ def validate_doc_variant(api: str, content: str) -> list[str]:
     """
     del api
     return check_draft_content(content)
+
+
+@mcp.tool()
+def evaluate_doc_draft(api: str, value: str, content: str, experiment: str) -> dict:
+    """Runs a real ablation with this draft substituted in for <value>, via
+    a GitHub Actions workflow — nothing is ever committed to the repo.
+    Takes minutes; this call returns as soon as the run has started, not
+    when it finishes. Returns a run_id — pass it to get_evaluation_status,
+    then get_evaluation_report once status is "completed". Costs real
+    Anthropic + LangSmith usage — call validate_doc_variant first, it's
+    free and local.
+    """
+    if os.environ.get("MCP_DRY_RUN") == "1":
+        run_id = f"{DRY_RUN_PREFIX}{uuid.uuid4().hex[:8]}"
+        return {
+            "run_id": run_id,
+            "note": f"MCP_DRY_RUN=1 — would dispatch evaluate-doc-draft for experiment={experiment!r}, "
+            f"api={api!r}, value={value!r}. No real GitHub Actions run was started.",
+        }
+
+    run_id = make_actions_client().dispatch_evaluation(api, value, content, experiment)
+    return {"run_id": run_id}
+
+
+@mcp.tool()
+def get_evaluation_status(run_id: str) -> dict:
+    """Poll a run started by evaluate_doc_draft. status is one of
+    queued/in_progress/completed."""
+    if run_id.startswith(DRY_RUN_PREFIX):
+        return {"run_id": run_id, "status": "completed", "conclusion": "success"}
+
+    run = make_actions_client().get_status(int(run_id))
+    return {"run_id": run.run_id, "status": run.status, "conclusion": run.conclusion}
+
+
+@mcp.tool()
+def get_evaluation_report(run_id: str) -> str:
+    """Once get_evaluation_status shows status="completed", fetch the
+    scored report as Markdown — the same summary + per-task detail table
+    `agent-doc-bench report --format markdown` renders locally.
+    """
+    if run_id.startswith(DRY_RUN_PREFIX):
+        return "MCP_DRY_RUN=1 — no real report; this is where the rendered results table would appear."
+
+    return make_actions_client().get_report(int(run_id))
 
 
 def main() -> None:

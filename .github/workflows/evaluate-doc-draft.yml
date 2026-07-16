@@ -38,10 +38,17 @@ jobs:
       - name: Run the ablation
         run: uv run agent-doc-bench run "experiments/${DRAFT_EXPERIMENT}.yaml"
 
-      - name: Render the report as JSON
-        run: uv run agent-doc-bench report "experiments/${DRAFT_EXPERIMENT}.yaml" --format json --output report.json
+      - name: Render the report as Markdown
+        # Markdown, not JSON: report_formatters.render_markdown() needs the
+        # real ExperimentResult dataclass (with .mean_score() etc. on nested
+        # Variant objects) to do anything useful — render_json() just does
+        # asdict(result), which would force the MCP server to reconstruct
+        # those dataclasses from plain JSON just to reuse the same
+        # formatter. Rendering here, where the dataclasses already exist,
+        # means get_evaluation_report can just return this text as-is.
+        run: uv run agent-doc-bench report "experiments/${DRAFT_EXPERIMENT}.yaml" --format markdown --output report.md
 
       - uses: actions/upload-artifact@v4
         with:
           name: report
-          path: report.json
+          path: report.md
