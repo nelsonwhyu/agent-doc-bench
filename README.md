@@ -144,3 +144,10 @@ experiment's `scorers` list until one exists. If the new API does support a real
 connection, `blpapi_live_shim.py` is a template for metadata-only instrumentation — mirror its
 pattern of monkeypatching only for event/timing metadata, never forwarding real response data into
 the scorer's comment.
+
+## PM-facing doc evaluation (MCP server)
+
+A PM can read what a documentation draft needs to cover, sanity-check it, and get it scored — from
+Claude or ChatGPT, no local checkout or git access needed — via the MCP server in `mcp_server/`,
+hosted on Fly.io. See [mcp_server/README.md](mcp_server/README.md) for the connector setup steps and
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)'s "Part 2" for the full design.

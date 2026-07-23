@@ -5,16 +5,104 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from agent_doc_bench.doc_requirements import build_doc_requirements
 from agent_doc_bench.docs_validator import check_draft_content
 from mcp_server.actions_client import ActionsClient
+from mcp_server.dev_oauth_provider import DevOAuthProvider
 from mcp_server.github_client import DocsRepoClient, GitHubDocsClient, LocalDocsClient
 
-mcp = FastMCP("agent-doc-bench")
+
+def _transport_security() -> TransportSecuritySettings | None:
+    """FastMCP's default DNS-rebinding protection only allows Host headers
+    of 127.0.0.1/localhost — anything fronting the server (e.g. a
+    cloudflared tunnel) needs its hostname added explicitly, via
+    MCP_PUBLIC_HOSTNAME, or every request gets a 421.
+    """
+    public_host = os.environ.get("MCP_PUBLIC_HOSTNAME")
+    if not public_host:
+        return None
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", public_host],
+        allowed_origins=[
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+            f"https://{public_host}",
+        ],
+    )
+
+
+def _auth_settings() -> AuthSettings | None:
+    """Claude/ChatGPT's connector UI (unlike Claude Code's `claude mcp add`)
+    requires a remote MCP server to support OAuth dynamic client
+    registration before it'll add it — set MCP_PUBLIC_HOSTNAME to stand up
+    DevOAuthProvider's OAuth server to satisfy that handshake.
+    """
+    public_host = os.environ.get("MCP_PUBLIC_HOSTNAME")
+    if not public_host:
+        return None
+    base_url = f"https://{public_host}"
+    return AuthSettings(
+        issuer_url=base_url,
+        resource_server_url=base_url,
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=["mcp"],
+            default_scopes=["mcp"],
+        ),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+
+
+_oauth_provider = (
+    DevOAuthProvider(shared_secret=os.environ.get("MCP_SHARED_SECRET")) if os.environ.get("MCP_PUBLIC_HOSTNAME") else None
+)
+
+mcp = FastMCP(
+    "agent-doc-bench",
+    # Fly's proxy connects from outside the container's network namespace —
+    # the FastMCP default of binding only 127.0.0.1 would be unreachable
+    # from there, even though it's fine for local/tunnel testing.
+    host="0.0.0.0",
+    transport_security=_transport_security(),
+    auth_server_provider=_oauth_provider,
+    auth=_auth_settings(),
+)
 
 DRY_RUN_PREFIX = "dry-run-"
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(request: Request) -> Response:
+    del request
+    return PlainTextResponse("ok")
+
+
+@mcp.custom_route("/dev-login", methods=["GET"])
+async def dev_login_form(request: Request) -> Response:
+    pending_id = request.query_params.get("pending", "")
+    page = _oauth_provider.render_login_page(pending_id) if _oauth_provider else None
+    if page is None:
+        return PlainTextResponse("Unknown or expired login attempt", status_code=400)
+    return HTMLResponse(page)
+
+
+@mcp.custom_route("/dev-login", methods=["POST"])
+async def dev_login_submit(request: Request) -> Response:
+    form = await request.form()
+    pending_id = str(form.get("pending", ""))
+    secret = str(form.get("secret", ""))
+    redirect_url = _oauth_provider.complete_login(pending_id, secret) if _oauth_provider else None
+    if redirect_url is None:
+        return PlainTextResponse("Incorrect passphrase, or the login attempt expired — go back and reconnect.", status_code=401)
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 def make_client() -> DocsRepoClient:
@@ -106,7 +194,7 @@ def evaluate_doc_draft(api: str, value: str, content: str, experiment: str) -> d
             f"api={api!r}, value={value!r}. No real GitHub Actions run was started.",
         }
 
-    run_id = make_actions_client().dispatch_evaluation(api, value, content, experiment)
+    run_id = str(make_actions_client().dispatch_evaluation(api, value, content, experiment))
     return {"run_id": run_id}
 
 
@@ -134,7 +222,7 @@ def get_evaluation_report(run_id: str) -> str:
 
 
 def main() -> None:
-    mcp.run(transport="sse")
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

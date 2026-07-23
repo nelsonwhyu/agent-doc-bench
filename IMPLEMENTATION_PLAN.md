@@ -20,7 +20,7 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 | Part | What it is | Status |
 |---|---|---|
 | [Part 1](#part-1--core-benchmark-shipped) | CLI-driven ablation framework: run tasks through an agent, score with 5 scorers, report from LangSmith | **Shipped**, in daily use |
-| [Part 2](#part-2--pm-facing-doc-evaluation-via-claude-and-chatgpt-planned) | Let a PM evaluate a doc draft conversationally from Claude or ChatGPT, no repo access needed | **Design only** — not started |
+| [Part 2](#part-2--pm-facing-doc-evaluation-via-claude-and-chatgpt-planned) | Let a PM evaluate a doc draft conversationally from Claude or ChatGPT, no repo access needed | **Hosted and connectable from Claude Desktop**; ChatGPT untested, no real (non-dry-run) evaluation dispatched yet |
 
 ### Next steps (Part 2, in order)
 
@@ -32,8 +32,8 @@ The framework is designed for ablation studies: hold all factors constant, vary 
 6. ~~`mcp_server/` scaffold — read-only tools (`list_apis`, `get_doc_requirements`, `list_doc_variants`, `get_doc_variant`, `validate_doc_variant`)~~ ✅ — 8 tests passing, `uv run pytest mcp_server/tests` (needs `uv sync --group mcp_server`)
 7. ~~`.github/workflows/evaluate-doc-draft.yml` — runs an ablation on demand, commits nothing~~ ✅ — `apply_draft.py`'s file-write/YAML-patch logic covered by 5 tests (`uv run pytest tests/test_apply_draft.py`); the workflow itself is untested until it's actually dispatched on GitHub (needs step 9)
 8. ~~`mcp_server/actions_client.py` + the evaluate/status/report tools~~ ✅ — 16 tests passing, `uv run pytest mcp_server/tests` (needs `uv sync --group mcp_server`)
-9. Decide hosting for the MCP server + wire OAuth **(up next)**
-10. Register the hosted connector in Claude Desktop and ChatGPT; smoke test end to end
+9. ~~Decide hosting for the MCP server + wire OAuth~~ ✅ — Fly.io (`Dockerfile` + `fly.toml`), `mcp_server/dev_oauth_provider.py`'s shared-secret-gated OAuth provider instead of per-PM identity (see Layer 3 below)
+10. ~~Register the hosted connector in Claude Desktop~~ ✅; ChatGPT not yet attempted; no real (non-dry-run) `evaluate_doc_draft` run has been dispatched through the hosted instance yet **(up next)**
 
 Full detail on each step is in [Part 2](#part-2--pm-facing-doc-evaluation-via-claude-and-chatgpt-planned).
 
@@ -437,15 +437,42 @@ Service credential scope (documented in `mcp_server/README.md`): one fine-graine
 
 ### Layer 3 — Hosting + dual-client registration (Claude Desktop + ChatGPT)
 
-- Serve over HTTP/SSE (`FastMCP` supports this transport directly) from one deployed instance reachable at a stable URL. Host TBD (needs a decision — anything that can run a small always-on Python process behind HTTPS).
-- Front it with OAuth so PMs authenticate with their own Claude/ChatGPT-linked identity; the server's own GitHub credential (above) is a single shared service identity, never something a PM sees or provides.
-- **Claude Desktop**: add as a remote MCP connector pointing at the hosted URL (Settings → Connectors).
-- **ChatGPT**: add as a custom connector (Team/Enterprise/Pro tier) pointing at the same hosted URL.
+**Implemented, with one simplification from the original design (see below).**
+
+- Serve over **streamable-http** (`FastMCP`'s `transport="streamable-http"`,
+  a single `/mcp` endpoint) — switched from an initial HTTP/SSE (`/sse` +
+  `/messages/`) prototype after discovering Claude's connector client speaks
+  streamable-http, not the legacy split-endpoint SSE transport, when
+  probing a remote server.
+- Hosted on **Fly.io** — `Dockerfile` + `fly.toml` at the repo root, a
+  scale-to-zero `shared-cpu-1x` machine. `fly deploy` builds the image
+  (`agent_doc_bench/` + `mcp_server/` code only — no data directories, since
+  the real client reads `docs_library/`/`task_suites/` from the GitHub
+  Contents API, not local disk) and pushes it to a stable `https://<app>.fly.dev`
+  hostname.
+- **OAuth, simplified**: the original design called for PMs authenticating
+  with their own Claude/ChatGPT-linked identity via a real OAuth login.
+  What's actually implemented (`mcp_server/dev_oauth_provider.py`'s
+  `DevOAuthProvider`) is a minimal single-tenant OAuth authorization server —
+  dynamic client registration (satisfies the handshake both Claude
+  Desktop's and ChatGPT's connector UIs require before adding a remote
+  server) plus a one-field shared-passphrase gate (`MCP_SHARED_SECRET`)
+  instead of per-PM login. No third-party identity provider, no per-PM
+  account provisioning — but also no per-PM identity or audit trail; see
+  "Open risks" below. The server's own GitHub credential (Layer 2, above)
+  remains a separate, single shared service identity either way, never
+  something a PM sees or provides.
+- **Claude Desktop**: added as a remote MCP connector pointing at the hosted
+  URL + `/mcp` (Settings → Connectors → Add custom connector) — confirmed
+  working end to end, including the full OAuth registration → authorize →
+  token exchange → tool call round trip.
+- **ChatGPT**: same connector setup should work (same OAuth handshake
+  Claude Desktop completes) but hasn't actually been attempted yet.
 - Same tool logic, same evaluation flow, in both — no second implementation, no drift risk between what each client can do.
 
 PM usage (documented in `mcp_server/README.md`):
-1. An engineer confirms the hosted URL is live and the OAuth app is registered.
-2. PM adds the connector once per client (Claude Desktop or ChatGPT → Settings → Connectors) using the hosted URL, and completes the OAuth prompt — no PAT, no manifest file, no local Python.
+1. An engineer confirms the hosted URL is live (`fly status --app agent-doc-bench-mcp`, or `GET /healthz`) and the shared secret has been set (`fly secrets set MCP_SHARED_SECRET=...`).
+2. PM adds the connector once per client (Claude Desktop or ChatGPT → Settings → Connectors) using the hosted URL + `/mcp`, and enters the shared passphrase when redirected to `/dev-login` — no PAT, no manifest file, no local Python.
 3. Chat naturally in either client: "what does the blpapi docs need to cover?" → `get_doc_requirements`; paste or attach a draft and ask "score this" → `validate_doc_variant` then `evaluate_doc_draft` + `get_evaluation_report`.
 
 **Note on file attachments**: for Markdown/plain-text drafts this is a lossless pass-through — the client sends exactly what was pasted or attached. For non-text formats (PDF, Word), both clients will extract text, but that extraction is a summarize/reformat step, not a guaranteed verbatim transcription — risky for a format whose exact strings get regex-matched (`expected_patterns`/`anti_patterns`). PMs should author/paste in Markdown directly rather than upload PDFs/Word docs; see Open risks.
@@ -463,9 +490,10 @@ agent_doc_bench/
 └── evaluate-doc-draft.yml     NEW — repository_dispatch entrypoint for evaluate_doc_draft; never commits
 
 mcp_server/                    NEW top-level dir
-├── server.py                  FastMCP tool definitions (HTTP/SSE transport)
+├── server.py                  FastMCP tool definitions (streamable-http transport)
 ├── github_client.py           PyGithub wrapper, read-only (Contents)
 ├── actions_client.py          GitHub Actions API wrapper (dispatch, run status, artifact download)
+├── dev_oauth_provider.py       NEW — minimal shared-secret-gated OAuth authorization server
 ├── README.md                  Hosting/OAuth setup + service credential scope + dry-run testing
 └── tests/
     ├── test_server_dry_run.py
@@ -473,6 +501,10 @@ mcp_server/                    NEW top-level dir
 
 tests/
 └── test_docs_validator.py     NEW — first test file in the repo
+
+Dockerfile                     NEW — builds agent_doc_bench/ + mcp_server/ only, uv-based
+fly.toml                       NEW — Fly.io app config (scale-to-zero, /healthz check)
+.dockerignore                  NEW
 
 pyproject.toml                 MODIFIED — optional `mcp_server` dependency group (mcp, PyGithub); pytest as dev dep
 AGENTS.md                      MODIFIED — add "Doc evaluation via MCP connector" pointer + validate-docs in Common commands
@@ -491,9 +523,9 @@ README.md                      MODIFIED — mention validate-docs, link mcp_serv
 8. `.github/workflows/evaluate-doc-draft.yml` — `repository_dispatch` handler: local-only file write, validate gate, mock-mode run, Markdown report artifact, no commit/push  ✅ — the file-write/YAML-patch step was factored out into `.github/workflows/scripts/apply_draft.py` rather than inline shell, for two reasons: (1) `client_payload.content` is untrusted PM-authored text, so it's read only via `os.environ` in Python and only ever written to a file — never interpolated into a `run:` shell string or f-string, per GitHub's script-injection guidance; (2) `api`/`value`/`experiment` are validated as plain `[A-Za-z0-9_.-]+` identifiers before being used as path components, since path traversal via `client_payload` is a real risk on a public-facing dispatch trigger, not a hypothetical. Covered by 5 tests (`uv run pytest tests/test_apply_draft.py`) that invoke the script directly; the workflow YAML itself is only syntax-checked locally — it can't be exercised end-to-end until it's actually dispatched on GitHub. Renders `--format markdown` rather than `--format json` (see step 9's note) so `get_evaluation_report` can return the artifact's text as-is.
 9. ~~`mcp_server/actions_client.py` + `evaluate_doc_draft`/`get_evaluation_status`/`get_evaluation_report` tools~~ ✅ — `render_json()` just does `asdict(result)`, which loses `results_fetcher`'s `.mean_score()`-bearing dataclasses; reconstructing them in the MCP server just to reuse `render_markdown()` would duplicate that shape, so the workflow (step 8) was changed to render `--format markdown` directly and upload that — `get_evaluation_report` just returns the artifact's text verbatim, no re-rendering needed. `evaluate_doc_draft`/`get_evaluation_status` in `MCP_DRY_RUN=1` mode return a synthetic `dry-run-<hex>` run id and never call `ActionsClient` at all. 16 tests passing (`uv run pytest mcp_server/tests`), including `test_actions_client.py` against lightweight fakes standing in for PyGithub's `Repository`/`Workflow`/`WorkflowRun`/`Artifact` — no real GitHub calls.
 10. `mcp_server/tests/test_server_dry_run.py` + `test_actions_client.py` — all 9 tools exercised without real GitHub/Actions calls  ✅ (done as part of step 9 above)
-11. Decide + stand up hosting for the HTTP/SSE server; wire OAuth in front of it; provision the read-only + Actions-write service credential **(up next)**
-12. Register the hosted URL as a connector in Claude Desktop and in ChatGPT; confirm both round-trip `get_doc_requirements` → `validate_doc_variant` → `evaluate_doc_draft` → `get_evaluation_report`
-13. One manual smoke test of the real evaluate path against a throwaway/test repo
+11. ~~Decide + stand up hosting for the server; wire OAuth in front of it; provision the read-only + Actions-write service credential~~ ✅ — Fly.io (`Dockerfile` + `fly.toml`); switched the transport from HTTP/SSE to `streamable-http` after discovering Claude's connector client expects the single-endpoint transport, not the legacy split `/sse` + `/messages/` one; `mcp_server/dev_oauth_provider.py`'s `DevOAuthProvider` provides the OAuth dynamic-client-registration handshake both Claude Desktop's and ChatGPT's connector UIs require, gated by one shared passphrase (`MCP_SHARED_SECRET`) rather than per-PM login — see Layer 3's note on this simplification
+12. Register the hosted URL as a connector in Claude Desktop and in ChatGPT; confirm both round-trip `get_doc_requirements` → `validate_doc_variant` → `evaluate_doc_draft` → `get_evaluation_report` — **Claude Desktop done and confirmed**, but that full round trip (including a dry-run `evaluate_doc_draft` call) was against an earlier local server exposed through a temporary `cloudflared` tunnel, before Fly hosting existed — the current Fly-hosted instance has only been smoke-tested at the protocol level (OAuth handshake + `initialize`), not yet re-confirmed with an actual tool call end to end; **ChatGPT not yet attempted (up next)**
+13. One manual smoke test of the real (non-dry-run) evaluate path against a throwaway/test repo — not yet done; the Fly-hosted instance is configured with real `GITHUB_TOKEN`/`GITHUB_OWNER`/`GITHUB_REPO` (no `MCP_DRY_RUN`), but no tool call has been made against it yet at all **(up next)**
 
 ### Verification (once implemented)
 
@@ -502,13 +534,15 @@ README.md                      MODIFIED — mention validate-docs, link mcp_serv
 3. `mcp_server/tests/test_server_dry_run.py`: drive the server via the `mcp` SDK's client session (HTTP/SSE), with `MCP_DRY_RUN=1` and `github_client`/`actions_client` mocked/pointed at local disk for read tools.
 4. ~~`mcp_server/tests/test_actions_client.py`: `evaluate_doc_draft` dispatches with the right `client_payload` (mocked GitHub API); `get_evaluation_report` correctly returns a fixture Markdown artifact's contents.~~ ✅
 5. `uv run agent-doc-bench validate-docs` against the repo as-is prints the `v2.md` stub warning, exits 0; `--strict` exits 1.
-6. One manual smoke test of the real evaluate path (`MCP_DRY_RUN=0`) against a throwaway/test repo — confirm a real Actions run completes, `git status` on `main` is unchanged before/after, `get_evaluation_report` returns a sane table, and the service credential can't write repo contents even if asked to.
-7. Confirm the same `evaluate_doc_draft` → `get_evaluation_report` round trip works identically from both a Claude Desktop connector session and a ChatGPT connector session.
+6. One manual smoke test of the real evaluate path (`MCP_DRY_RUN=0`) against a throwaway/test repo — confirm a real Actions run completes, `git status` on `main` is unchanged before/after, `get_evaluation_report` returns a sane table, and the service credential can't write repo contents even if asked to. **Not yet done** — the Fly-hosted instance is configured for real credentials but no tool call has been made against it yet.
+7. Confirm the same `evaluate_doc_draft` → `get_evaluation_report` round trip works identically from both a Claude Desktop connector session and a ChatGPT connector session. **Partially done**: the full round trip (OAuth handshake, `evaluate_doc_draft`, `get_evaluation_status`, `get_evaluation_report`) was confirmed from Claude Desktop, but against a `MCP_DRY_RUN=1` server behind a temporary tunnel, not the Fly deployment — and not yet attempted from ChatGPT at all.
 
 ### Open risks
 
 - **GitHub push is a prerequisite outside this design** — nothing in Layer 2/3 works until the repo has a remote.
-- **Hosting + OAuth is a real lift** — an always-on service and a registered OAuth app. Worth confirming ChatGPT access is actually needed before starting this vs. a cheaper Claude-only local `.mcpb` fallback (still viable if it turns out only Claude Desktop is needed — reintroduces stdio transport and a per-PM env var for the read-only service credential instead of OAuth, nothing else changes).
+- **`MCP_SHARED_SECRET` is one passphrase for everyone, not per-PM identity.** `DevOAuthProvider` satisfies the OAuth handshake Claude/ChatGPT's connector UIs require, but there's no real user database behind it — anyone with the URL and the shared passphrase gets a token, and every token looks the same to the server (no per-PM audit trail, no ability to revoke one PM without rotating the secret for everyone). Fine for a small trusted team; a real gap if this needs to scale past that or if per-PM accountability ever matters.
+- **Fly's scale-to-zero means occasional cold starts.** The first request after idle takes a few seconds longer while the machine boots — acceptable for occasional PM use, not for a latency-sensitive flow.
+- **No real (non-dry-run) evaluation has been dispatched through the hosted instance yet** — the Fly deployment is configured with real GitHub credentials, but every tool call so far (dry-run or real) has been either a local test or a protocol-level smoke test (OAuth handshake + `initialize`), not an actual `evaluate_doc_draft` round trip against it. See implementation step 13.
 - **Evaluation cost/latency per call**: each `evaluate_doc_draft` call burns real Anthropic + LangSmith usage and takes minutes; `validate_doc_variant` is free/local and should be presented to PMs as the first, cheap step before spending an evaluation run.
 - **File-attachment fidelity**: pasted/attached Markdown passes through verbatim, but PDF/Word attachments go through a client-side text-extraction step that isn't guaranteed to preserve exact strings — a real risk for a format whose `expected_patterns`/`anti_patterns` are regex-matched. Mitigate by instructing PMs (in `mcp_server/README.md` and in tool descriptions) to paste or attach Markdown/plain text, not PDF/Word.
 - **`repository_dispatch` payload size**: fine for a documentation file's usual few KB; if a draft ever approaches GitHub's ~64KB `client_payload` limit, `evaluate_doc_draft` should fail with a clear size error rather than silently truncating.
